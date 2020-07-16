@@ -28,6 +28,10 @@
 using namespace llvm;
 #define DEBUG_TYPE "inline"
 
+namespace llvm {
+InlineAdvisor *getExplorationAdvisor(FunctionAnalysisManager &FAM);
+} // namespace llvm
+
 // This weirdly named statistic tracks the number of times that, when attempting
 // to inline a function A into B, we analyze the callers of B in order to see
 // if those would be more profitable and blocked inline steps.
@@ -158,6 +162,9 @@ bool InlineAdvisorAnalysis::Result::tryCreate(InlineParams Params,
   switch (Mode) {
   case InliningAdvisorMode::Default:
     Advisor.reset(new DefaultInlineAdvisor(FAM, Params));
+    break;
+  case InliningAdvisorMode::Explore:
+    Advisor.reset(getExplorationAdvisor(FAM));
     break;
   case InliningAdvisorMode::Development:
     // To be added subsequently under conditional compilation.

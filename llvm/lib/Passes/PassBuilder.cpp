@@ -218,10 +218,12 @@ static cl::opt<bool> EnableGVNHoist(
     cl::desc("Enable the GVN hoisting pass for the new PM (default = off)"));
 
 static cl::opt<InliningAdvisorMode> UseInlineAdvisor(
-    "enable-ml-inliner", cl::init(InliningAdvisorMode::Default), cl::Hidden,
-    cl::desc("Enable ML policy for inliner. Currently trained for -Oz only"),
+    "inline-advisor", cl::init(InliningAdvisorMode::Default), cl::Hidden,
+    cl::desc("Choose inlining advisor. ML:Currently trained for -Oz only"),
     cl::values(clEnumValN(InliningAdvisorMode::Default, "default",
                           "Heuristics-based inliner version."),
+               clEnumValN(InliningAdvisorMode::Explore, "explore",
+                          "Use exploration mode."),
                clEnumValN(InliningAdvisorMode::Development, "development",
                           "Use development mode (runtime-loadable model)."),
                clEnumValN(InliningAdvisorMode::Release, "release",

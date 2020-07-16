@@ -74,6 +74,7 @@ add_llvm_component_library(LLVMAnalysis
   IndirectCallPromotionAnalysis.cpp
   InlineCost.cpp
   InlineAdvisor.cpp
+  InlineExplorationAdvisor.cpp
   InlineFeaturesAnalysis.cpp
   InlineSizeEstimatorAnalysis.cpp
   InstCount.cpp
