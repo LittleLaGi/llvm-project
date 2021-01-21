@@ -224,6 +224,8 @@ static cl::opt<InliningAdvisorMode> UseInlineAdvisor(
                           "Heuristics-based inliner version."),
                clEnumValN(InliningAdvisorMode::Explore, "explore",
                           "Use exploration mode."),
+               clEnumValN(InliningAdvisorMode::Force, "force",
+                          "Use force mode."),
                clEnumValN(InliningAdvisorMode::Development, "development",
                           "Use development mode (runtime-loadable model)."),
                clEnumValN(InliningAdvisorMode::Release, "release",

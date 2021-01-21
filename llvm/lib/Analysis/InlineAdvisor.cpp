@@ -30,6 +30,7 @@ using namespace llvm;
 
 namespace llvm {
 InlineAdvisor *getExplorationAdvisor(FunctionAnalysisManager &FAM);
+InlineAdvisor *getForceAdvisor(FunctionAnalysisManager &FAM);
 } // namespace llvm
 
 // This weirdly named statistic tracks the number of times that, when attempting
@@ -162,6 +163,9 @@ bool InlineAdvisorAnalysis::Result::tryCreate(InlineParams Params,
   switch (Mode) {
   case InliningAdvisorMode::Default:
     Advisor.reset(new DefaultInlineAdvisor(FAM, Params));
+    break;
+  case InliningAdvisorMode::Force:
+    Advisor.reset(getForceAdvisor(FAM));
     break;
   case InliningAdvisorMode::Explore:
     Advisor.reset(getExplorationAdvisor(FAM));

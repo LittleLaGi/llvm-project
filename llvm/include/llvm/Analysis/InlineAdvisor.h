@@ -36,7 +36,7 @@ class OptimizationRemarkEmitter;
 /// requires the full C Tensorflow API library, and evaluates models
 /// dynamically. This mode also permits generating training logs, for offline
 /// training.
-enum class InliningAdvisorMode : int { Default, Release, Development, Explore };
+enum class InliningAdvisorMode : int { Default, Release, Development, Explore, Force };
 
 class InlineAdvisor;
 /// Capture state between an inlining decision having had been made, and

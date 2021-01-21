@@ -76,6 +76,7 @@ add_llvm_component_library(LLVMAnalysis
   InlineAdvisor.cpp
   InlineExplorationAdvisor.cpp
   InlineFeaturesAnalysis.cpp
+  InlineForceAdvisor.cpp
   InlineSizeEstimatorAnalysis.cpp
   InstCount.cpp
   InstructionPrecedenceTracking.cpp
