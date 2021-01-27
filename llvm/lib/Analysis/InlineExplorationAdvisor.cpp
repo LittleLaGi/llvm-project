@@ -102,13 +102,22 @@ InlineExplorationAdvisor::getAdvice(CallBase &CB) {
         this, CB,
         FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
         false);
-  case InlineExplorationAdvisorMode::Replay:
+  case InlineExplorationAdvisorMode::Replay: {
+    auto &Decisions = getCallSiteRecord()->decisions;
+    auto Key = StringPair{CB.getCaller()->getName().str(),
+                          CB.getCalledFunction()->getName().str()};
+    if (Decisions.count(Key) == 0) {
+      return std::make_unique<InlineExplorationAdvice>(
+          this, CB,
+          FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
+          false);
+    }
+
     return std::make_unique<InlineExplorationAdvice>(
         this, CB,
         FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-        getCallSiteRecord()->decision(
-            StringPair{CB.getCaller()->getName().str(),
-                       CB.getCalledFunction()->getName().str()}));
+        getCallSiteRecord()->decision(std::move(Key)));
+  }
   default:
     std::abort();
   }
@@ -141,7 +150,7 @@ void InlineExplorationAdvice::recordUnsuccessfulInliningImpl(
   outs() << "Inline unsuccessful: " << Result.getFailureReason() << "\n";
 }
 void InlineExplorationAdvice::recordUnattemptedInliningImpl() {
-  //outs() << "Inline unattempted\n";
+  // outs() << "Inline unattempted\n";
 }
 
 namespace llvm {
