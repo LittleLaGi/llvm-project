@@ -1,7 +1,6 @@
 #pragma once
 
 #include "llvm/Analysis/InlineAdvisor.h"
-#include <set>
 
 namespace llvm {
 

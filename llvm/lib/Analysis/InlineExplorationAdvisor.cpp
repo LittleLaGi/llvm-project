@@ -4,6 +4,7 @@
 
 #include <fstream>
 #include <iomanip>
+#include <set>
 
 #include "json.hpp"
 
@@ -28,67 +29,74 @@ cl::opt<std::string> InlineExplorationAdvisorInput(
     cl::desc("JSON file that is used either as input or output depending on "
              "the exploration mode. (default:/tmp/inline_explore_advisor"));
 
-struct StringPair {
-  std::string caller;
-  std::string callee;
+struct CallBaseEntry {
+  std::string Caller;
+  std::string Callee;
+  size_t Id;
 };
 
-void to_json(json &j, const StringPair &p) {
-  j = json{{"caller", p.caller}, {"callee", p.callee}};
+void to_json(json &J, const CallBaseEntry &P) {
+  J = json{{"caller", P.Caller}, {"callee", P.Callee}, {"id", P.Id}};
 }
 
-// bool operator==(const StringPair &a, const StringPair &b) {
-// return a.caller == b.caller && a.callee == b.callee;
-//}
-
-bool operator<(const StringPair &a, const StringPair &b) {
-  if (a.caller == b.caller)
-    return a.callee < b.callee;
-  return a.caller < b.caller;
+bool operator<(const CallBaseEntry &A, const CallBaseEntry &B) {
+  return std::tie(A.Id, A.Caller, B.Callee) <
+         std::tie(B.Id, B.Caller, B.Callee);
 }
 
 class CallSiteRecord {
 public:
   CallSiteRecord() {
     if (ExplorationMode == InlineExplorationAdvisorMode::Replay) {
-      std::ifstream in{InlineExplorationAdvisorInput};
-      json j;
-      in >> j;
-      for (const auto &cs : j)
-        decisions[StringPair{cs["caller"], cs["callee"]}] = cs["inline"];
+      std::ifstream In{InlineExplorationAdvisorInput};
+      json J;
+      In >> J;
+      for (const auto &Cs : J) {
+        Decisions[CallBaseEntry{Cs["caller"], Cs["callee"], Cs["id"]}] =
+            Cs["inline"];
+      }
     }
   }
   ~CallSiteRecord() {
     if (ExplorationMode == InlineExplorationAdvisorMode::Record) {
-      json j{callsites};
-      std::ofstream out{InlineExplorationAdvisorInput};
-      out << std::setw(4) << j[0] << std::endl;
+      json J{Callsites};
+      std::ofstream Out{InlineExplorationAdvisorInput};
+      Out << std::setw(4) << J[0] << std::endl;
     }
   }
 
-  void insert(StringPair &&callsite) { callsites.insert(std::move(callsite)); }
+  void insert(CallBaseEntry &&Callsite) {
+    Callsites.insert(std::move(Callsite));
+  }
 
-  bool decision(StringPair &&callsite) {
-    return decisions.at(std::move(callsite));
+  bool decision(CallBaseEntry &&Callsite) {
+    return Decisions.at(std::move(Callsite));
   }
 
   void addTransitiveDecisions(const std::string &Caller,
                               const std::string &Callee) {
-    std::vector<StringPair> callsitesFromCallee;
-    for (const auto &d : decisions)
-      if (d.first.caller == Callee)
-        callsitesFromCallee.push_back(d.first);
-    for (const auto &cs : callsitesFromCallee)
-      decisions[StringPair{Caller, cs.callee}] = decisions.at(cs);
+    std::vector<CallBaseEntry> CallsitesFromCallee;
+    for (const auto &D : Decisions)
+      if (D.first.Caller == Callee)
+        CallsitesFromCallee.push_back(D.first);
+    for (const auto &Cs : CallsitesFromCallee)
+      Decisions[CallBaseEntry{Caller, Cs.Callee, Cs.Id}] = Decisions.at(Cs);
   }
 
-  std::set<StringPair> callsites;
-  std::map<StringPair, bool> decisions;
+  std::set<CallBaseEntry> Callsites;
+  std::map<CallBaseEntry, bool> Decisions;
 };
 
 CallSiteRecord *getCallSiteRecord() {
-  static auto record = std::make_unique<CallSiteRecord>();
-  return record.get();
+  static auto Record = std::make_unique<CallSiteRecord>();
+  return Record.get();
+}
+
+size_t getCallBaseId(const CallBase &CB) {
+  auto *N = CB.getMetadata("callbase.id");
+  Constant *C = dyn_cast<ConstantAsMetadata>(dyn_cast<MDNode>(N)->getOperand(0))
+                    ->getValue();
+  return cast<ConstantInt>(C)->getZExtValue();
 }
 
 } // namespace
@@ -103,10 +111,17 @@ InlineExplorationAdvisor::getAdvice(CallBase &CB) {
         FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
         false);
   case InlineExplorationAdvisorMode::Replay: {
-    auto &Decisions = getCallSiteRecord()->decisions;
-    auto Key = StringPair{CB.getCaller()->getName().str(),
-                          CB.getCalledFunction()->getName().str()};
+    auto &Decisions = getCallSiteRecord()->Decisions;
+    auto Key = CallBaseEntry{CB.getCaller()->getName().str(),
+                             CB.getCalledFunction()->getName().str(),
+                             getCallBaseId(CB)};
+
+    // outs() << "<Query>\n";
+    // outs() << Key.caller << ' ' << Key.callee << '\n';
+    // outs() << "</Query>\n";
     if (Decisions.count(Key) == 0) {
+      outs() << "[InlineExplorationAdvisor]; unknown callsite: " << CB.getName()
+             << '\n';
       return std::make_unique<InlineExplorationAdvice>(
           this, CB,
           FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
@@ -124,9 +139,9 @@ InlineExplorationAdvisor::getAdvice(CallBase &CB) {
 }
 
 void InlineExplorationAdvisor::recordCallsite(const CallBase &CB) {
-  getCallSiteRecord()->insert(
-      StringPair{CB.getCaller()->getName().str(),
-                 CB.getCalledFunction()->getName().str()});
+  getCallSiteRecord()->insert(CallBaseEntry{
+      CB.getCaller()->getName().str(), CB.getCalledFunction()->getName().str(),
+      getCallBaseId(CB)});
 }
 
 void InlineExplorationAdvisor::recordInlining(const Function *Caller,
