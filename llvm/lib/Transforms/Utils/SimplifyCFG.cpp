@@ -1345,6 +1345,10 @@ bool SimplifyCFGOpt::HoistThenElseCodeToIf(BranchInst *BI,
                              LLVMContext::MD_access_group,
                              LLVMContext::MD_preserve_access_index};
       combineMetadata(I1, I2, KnownIDs, true);
+      auto *CBID = I2->getMetadata("callbase.id");
+      if (CBID) {
+        I1->setMetadata("callbase.id", CBID);
+      }
 
       // I1 and I2 are being combined into a single instruction.  Its debug
       // location is the merged locations of the original instructions.
