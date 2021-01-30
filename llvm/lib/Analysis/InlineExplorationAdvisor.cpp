@@ -94,6 +94,7 @@ CallSiteRecord *getCallSiteRecord() {
 
 size_t getCallBaseId(const CallBase &CB) {
   auto *N = CB.getMetadata("callbase.id");
+  assert (N && "CallBase does not carry metadata.\n");
   Constant *C = dyn_cast<ConstantAsMetadata>(dyn_cast<MDNode>(N)->getOperand(0))
                     ->getValue();
   return cast<ConstantInt>(C)->getZExtValue();
@@ -116,9 +117,6 @@ InlineExplorationAdvisor::getAdvice(CallBase &CB) {
                              CB.getCalledFunction()->getName().str(),
                              getCallBaseId(CB)};
 
-    // outs() << "<Query>\n";
-    // outs() << Key.caller << ' ' << Key.callee << '\n';
-    // outs() << "</Query>\n";
     if (Decisions.count(Key) == 0) {
       outs() << "[InlineExplorationAdvisor]; unknown callsite: " << CB.getName()
              << '\n';
