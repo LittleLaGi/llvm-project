@@ -93,8 +93,13 @@ CallSiteRecord *getCallSiteRecord() {
 }
 
 size_t getCallBaseId(const CallBase &CB) {
+  //CB.getCaller()->print(outs());
+  //outs() << "<CALLBASEID>\n"
+         //<< CB.getCaller()->getName() << ' '
+         //<< CB.getCalledFunction()->getName() << "\n</CALLBASEID>\n";
+  //outs().flush();
   auto *N = CB.getMetadata("callbase.id");
-  assert (N && "CallBase does not carry metadata.\n");
+  assert(N && "CallBase does not carry metadata.\n");
   Constant *C = dyn_cast<ConstantAsMetadata>(dyn_cast<MDNode>(N)->getOperand(0))
                     ->getValue();
   return cast<ConstantInt>(C)->getZExtValue();
@@ -118,8 +123,8 @@ InlineExplorationAdvisor::getAdvice(CallBase &CB) {
                              getCallBaseId(CB)};
 
     if (Decisions.count(Key) == 0) {
-      outs() << "[InlineExplorationAdvisor]; unknown callsite: " << CB.getName()
-             << '\n';
+      //outs() << "[InlineExplorationAdvisor]; unknown callsite: " << CB.getName()
+             //<< '\n';
       return std::make_unique<InlineExplorationAdvice>(
           this, CB,
           FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
