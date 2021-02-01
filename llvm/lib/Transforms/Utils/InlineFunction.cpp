@@ -1615,6 +1615,24 @@ void llvm::updateProfileCallee(
             CI->updateProfWeight(newEntryCount, priorEntryCount);
   }
 }
+static void propagateCallbaseIdMetadata(ValueToValueMapTy &VMap) {
+  for (const auto &[OldI, NewI] : VMap) {
+    auto *OldCB = dyn_cast<CallBase>(OldI);
+    auto *NewCB = dyn_cast<CallBase>(NewI);
+    if (not OldI or not NewCB)
+      continue;
+    outs() << "<Propagate callbase.id>\n";
+    OldCB->print(outs());
+    outs() << '\n';
+    NewCB->print(outs());
+    outs() << "\n</Propagate callbase.id>\n";
+    outs().flush();
+    auto *CBID = OldCB->getMetadata("callbase.id");
+    if (CBID) {
+      NewCB->setMetadata("callbase.id", CBID);
+    }
+  }
+}
 
 /// This function inlines the called function into the basic block of the
 /// caller. This returns false if it is not possible to inline this call.
@@ -1808,6 +1826,7 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
     CloneAndPruneFunctionInto(Caller, CalledFunc, VMap,
                               /*ModuleLevelChanges=*/false, Returns, ".i",
                               &InlinedFunctionInfo, &CB);
+    //propagateCallbaseIdMetadata(VMap);
     // Remember the first block that is newly cloned over.
     FirstNewBlock = LastBlock; ++FirstNewBlock;
 
@@ -2003,6 +2022,11 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
           NewCI->setAttributes(Attrs);
           NewCI->setCallingConv(CI->getCallingConv());
           CI->replaceAllUsesWith(NewCI);
+          auto *CBID = CI->getMetadata("callbase.id");
+          if (CBID) {
+            NewCI->setMetadata("callbase.id", CBID);
+          }
+
           CI->eraseFromParent();
           CI = NewCI;
         }
@@ -2163,6 +2187,10 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
         Instruction *NewInst = CallBase::Create(I, OpBundles, I);
         NewInst->takeName(I);
         I->replaceAllUsesWith(NewInst);
+        auto *CBID = I->getMetadata("callbase.id");
+        if (CBID) {
+          NewInst->setMetadata("callbase.id", CBID);
+        }
         I->eraseFromParent();
 
         OpBundles.clear();
@@ -2416,7 +2444,7 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
     DebugLoc Loc;
     for (unsigned i = 0, e = Returns.size(); i != e; ++i) {
       ReturnInst *RI = Returns[i];
-      BranchInst* BI = BranchInst::Create(AfterCallBB, RI);
+      BranchInst *BI = BranchInst::Create(AfterCallBB, RI);
       Loc = RI->getDebugLoc();
       BI->setDebugLoc(Loc);
       RI->eraseFromParent();
@@ -2473,7 +2501,7 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
 
   // Splice the code entry block into calling block, right before the
   // unconditional branch.
-  CalleeEntry->replaceAllUsesWith(OrigBB);  // Update PHI nodes
+  CalleeEntry->replaceAllUsesWith(OrigBB); // Update PHI nodes
   OrigBB->getInstList().splice(Br->getIterator(), CalleeEntry->getInstList());
 
   // Remove the unconditional branch.

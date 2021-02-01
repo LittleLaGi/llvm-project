@@ -2048,6 +2048,10 @@ BasicBlock *llvm::changeToInvokeAndSplitBasicBlock(CallInst *CI,
   II->setDebugLoc(CI->getDebugLoc());
   II->setCallingConv(CI->getCallingConv());
   II->setAttributes(CI->getAttributes());
+  auto *CBID = CI->getMetadata("callbase.id");
+  if (CBID) {
+    II->setMetadata("callbase.id", CBID);
+  }
 
   // Make sure that anything using the call now uses the invoke!  This also
   // updates the CallGraph if present, because it uses a WeakTrackingVH.
@@ -2492,6 +2496,7 @@ void llvm::patchReplacementInstruction(Instruction *I, Value *Repl) {
   // guarantees the execution of the other), then we can combine the
   // noalias scopes here and do better than the general conservative
   // answer used in combineMetadata().
+  auto *CBIDRepl = ReplInst->getMetadata("callbase.id");
 
   // In general, GVN unifies expressions over different control-flow
   // regions, and so we need a conservative combination of the noalias
@@ -2503,6 +2508,8 @@ void llvm::patchReplacementInstruction(Instruction *I, Value *Repl) {
       LLVMContext::MD_invariant_group, LLVMContext::MD_nonnull,
       LLVMContext::MD_access_group,    LLVMContext::MD_preserve_access_index};
   combineMetadata(ReplInst, I, KnownIDs, false);
+  if(CBIDRepl)
+      ReplInst->setMetadata("callbase.id", CBIDRepl);
 }
 
 template <typename RootType, typename DominatesFn>

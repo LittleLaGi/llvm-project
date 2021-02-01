@@ -864,6 +864,7 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpy, Value *cpyDest,
     cast<AllocaInst>(cpyDest)->setAlignment(srcAlign);
   }
 
+  auto *CBID = C->getMetadata("callbase.id");
   // Drop any cached information about the call, because we may have changed
   // its dependence information by changing its parameter.
   MD->removeInstruction(C);
@@ -876,6 +877,9 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpy, Value *cpyDest,
                          LLVMContext::MD_invariant_group,
                          LLVMContext::MD_access_group};
   combineMetadata(C, cpy, KnownIDs, true);
+  if(CBID){
+      C->setMetadata("callbase.id", CBID);
+  }
 
   // Remove the memcpy.
   MD->removeInstruction(cpy);
