@@ -167,7 +167,12 @@ private:
 class DefaultInlineAdvisor : public InlineAdvisor {
 public:
   DefaultInlineAdvisor(FunctionAnalysisManager &FAM, InlineParams Params)
-      : InlineAdvisor(FAM), Params(Params) {}
+      : InlineAdvisor(FAM), Params(Params), RecordStream{RecordString} {
+    if (const char *RecordFileName = std::getenv("RECORD_INLINE"))
+      RecordFile = RecordFileName;
+  }
+
+  virtual ~DefaultInlineAdvisor();
 
 private:
   std::unique_ptr<InlineAdvice> getAdvice(CallBase &CB) override;
@@ -175,6 +180,9 @@ private:
   void onPassExit() override { freeDeletedFunctions(); }
 
   InlineParams Params;
+  std::string RecordFile;
+  std::string RecordString;
+  raw_string_ostream RecordStream;
 };
 
 /// The InlineAdvisorAnalysis is a module pass because the InlineAdvisor

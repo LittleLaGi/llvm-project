@@ -24,6 +24,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <sstream>
+#include <system_error>
 
 using namespace llvm;
 #define DEBUG_TYPE "inline"
@@ -54,15 +55,50 @@ static cl::opt<int>
                         cl::init(2), cl::Hidden);
 
 namespace {
+__attribute__((noinline)) size_t getCallBaseId(const CallBase &CB) {
+  auto *N = CB.getMetadata("callbase.id");
+  assert(N && "CallBase does not carry metadata.\n");
+  Constant *C = dyn_cast<ConstantAsMetadata>(dyn_cast<MDNode>(N)->getOperand(0))
+                    ->getValue();
+  return cast<ConstantInt>(C)->getZExtValue();
+}
+
+bool hasCallBaseId(const CallBase &CB) {
+  auto *N = CB.getMetadata("callbase.id");
+  if (not N)
+    return false;
+
+  if (not dyn_cast<MDNode>(N))
+    return false;
+
+  if (not dyn_cast<MDNode>(N)->getOperand(0))
+    return false;
+
+  auto *CM = dyn_cast<ConstantAsMetadata>(dyn_cast<MDNode>(N)->getOperand(0));
+  if (not CM)
+    return false;
+  if (not CM->getValue())
+    return false;
+
+  return true;
+}
+
 class DefaultInlineAdvice : public InlineAdvice {
 public:
   DefaultInlineAdvice(DefaultInlineAdvisor *Advisor, CallBase &CB,
-                      Optional<InlineCost> OIC, OptimizationRemarkEmitter &ORE)
+                      Optional<InlineCost> OIC, OptimizationRemarkEmitter &ORE,
+                      raw_string_ostream *RecordStream)
       : InlineAdvice(Advisor, CB, ORE, OIC.hasValue()), OriginalCB(&CB),
-        OIC(OIC) {}
+        OIC(OIC), ID{(OriginalCB && hasCallBaseId(*OriginalCB))
+                         ? getCallBaseId(*OriginalCB)
+                         : -1},
+        RecordStream{RecordStream} {}
 
 private:
   void recordUnsuccessfulInliningImpl(const InlineResult &Result) override {
+    if (RecordStream)
+      *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
+                    << ID << ',' << "not_inlined" << '\n';
     using namespace ore;
     llvm::setInlineRemark(*OriginalCB, std::string(Result.getFailureReason()) +
                                            "; " + inlineCostStr(*OIC));
@@ -75,16 +111,24 @@ private:
   }
 
   void recordInliningWithCalleeDeletedImpl() override {
+    if (RecordStream)
+      *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
+                    << ID << ',' << "inlined" << '\n';
     emitInlinedInto(ORE, DLoc, Block, *Callee, *Caller, *OIC);
   }
 
   void recordInliningImpl() override {
+    if (RecordStream)
+      *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
+                    << ID << ',' << "inlined" << '\n';
     emitInlinedInto(ORE, DLoc, Block, *Callee, *Caller, *OIC);
   }
 
 private:
   CallBase *const OriginalCB;
   Optional<InlineCost> OIC;
+  size_t ID;
+  raw_string_ostream *RecordStream;
 };
 
 } // namespace
@@ -123,11 +167,20 @@ getDefaultInlineAdvice(CallBase &CB, FunctionAnalysisManager &FAM,
                                 Params.EnableDeferral.getValue());
 }
 
+DefaultInlineAdvisor::~DefaultInlineAdvisor() {
+  if (RecordFile.empty())
+    return;
+  std::error_code EC;
+  raw_fd_ostream FStream{RecordFile, EC};
+  FStream << RecordStream.str();
+}
+
 std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
   auto OIC = getDefaultInlineAdvice(CB, FAM, Params);
   return std::make_unique<DefaultInlineAdvice>(
       this, CB, OIC,
-      FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()));
+      FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
+      RecordFile.empty() ? nullptr : &RecordStream);
 }
 
 InlineAdvice::InlineAdvice(InlineAdvisor *Advisor, CallBase &CB,
