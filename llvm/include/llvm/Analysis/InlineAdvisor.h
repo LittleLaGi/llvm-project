@@ -10,6 +10,7 @@
 #define LLVM_INLINEADVISOR_H_
 
 #include <memory>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -36,7 +37,13 @@ class OptimizationRemarkEmitter;
 /// requires the full C Tensorflow API library, and evaluates models
 /// dynamically. This mode also permits generating training logs, for offline
 /// training.
-enum class InliningAdvisorMode : int { Default, Release, Development, Explore, Force };
+enum class InliningAdvisorMode : int {
+  Default,
+  Release,
+  Development,
+  Explore,
+  Force
+};
 
 class InlineAdvisor;
 /// Capture state between an inlining decision having had been made, and
@@ -170,6 +177,8 @@ public:
       : InlineAdvisor(FAM), Params(Params), RecordStream{RecordString} {
     if (const char *RecordFileName = std::getenv("RECORD_INLINE"))
       RecordFile = RecordFileName;
+    if (const char *FixedDecisionsFileName = std::getenv("FIXED_INLINE_RECORD"))
+      loadFixedDecisions(FixedDecisionsFileName);
   }
 
   virtual ~DefaultInlineAdvisor();
@@ -177,12 +186,15 @@ public:
 private:
   std::unique_ptr<InlineAdvice> getAdvice(CallBase &CB) override;
 
+  void loadFixedDecisions(const char *FName);
+
   void onPassExit() override { freeDeletedFunctions(); }
 
   InlineParams Params;
   std::string RecordFile;
   std::string RecordString;
   raw_string_ostream RecordStream;
+  std::unordered_map<size_t, bool> FixedDecisions;
 };
 
 /// The InlineAdvisorAnalysis is a module pass because the InlineAdvisor

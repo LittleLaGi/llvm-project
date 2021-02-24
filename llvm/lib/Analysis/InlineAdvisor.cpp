@@ -23,6 +23,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <fstream>
 #include <sstream>
 #include <system_error>
 
@@ -95,6 +96,12 @@ public:
         RecordStream{RecordStream} {}
 
 private:
+  void recordUnattemptedInliningImpl() override {
+    if (RecordStream)
+      *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
+                    << ID << ',' << "not_inlined" << '\n';
+  }
+
   void recordUnsuccessfulInliningImpl(const InlineResult &Result) override {
     if (RecordStream)
       *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
@@ -176,11 +183,37 @@ DefaultInlineAdvisor::~DefaultInlineAdvisor() {
 }
 
 std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
+  auto *RecordStreamPtr = RecordFile.empty() ? nullptr : &RecordStream;
+  if (hasCallBaseId(CB)) {
+    auto Id = getCallBaseId(CB);
+    auto DecisionIt = FixedDecisions.find(Id);
+    if (DecisionIt != FixedDecisions.end()) {
+      Optional<InlineCost> ShouldInline;
+      if (DecisionIt->second)
+        ShouldInline = InlineCost::getAlways("Forced");
+
+      return std::make_unique<DefaultInlineAdvice>(
+          this, CB, ShouldInline,
+          FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
+          RecordStreamPtr);
+    }
+  }
+
   auto OIC = getDefaultInlineAdvice(CB, FAM, Params);
   return std::make_unique<DefaultInlineAdvice>(
       this, CB, OIC,
       FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-      RecordFile.empty() ? nullptr : &RecordStream);
+      RecordStreamPtr);
+}
+
+void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
+  std::ifstream IStream{FName};
+  for (std::string Line; std::getline(IStream, Line);) {
+    SmallVector<StringRef, 4> LineParts;
+    StringRef{Line}.split(LineParts, ',');
+    assert(LineParts.size() == 4);
+    FixedDecisions[std::stoi(LineParts[2].str())] = LineParts[3] == "inlined";
+  }
 }
 
 InlineAdvice::InlineAdvice(InlineAdvisor *Advisor, CallBase &CB,
