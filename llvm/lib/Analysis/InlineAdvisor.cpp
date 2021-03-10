@@ -40,6 +40,9 @@ InlineAdvisor *getForceAdvisor(FunctionAnalysisManager &FAM);
 // if those would be more profitable and blocked inline steps.
 STATISTIC(NumCallerCallersAnalyzed, "Number of caller-callers analyzed");
 
+static cl::opt<bool> InlineDisable("no-inlining", cl::init(false), cl::Hidden,
+                                   cl::desc("Do not inline."));
+
 /// Flag to add inline messages as callsite attributes 'inline-remark'.
 static cl::opt<bool>
     InlineRemarkAttribute("inline-remark-attribute", cl::init(false),
@@ -183,6 +186,13 @@ DefaultInlineAdvisor::~DefaultInlineAdvisor() {
 }
 
 std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
+  if (InlineDisable) {
+    Optional<InlineCost> ShouldInline;
+    return std::make_unique<DefaultInlineAdvice>(
+        this, CB, ShouldInline,
+        FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
+        nullptr);
+  }
   auto *RecordStreamPtr = RecordFile.empty() ? nullptr : &RecordStream;
   if (hasCallBaseId(CB)) {
     auto Id = getCallBaseId(CB);
