@@ -279,6 +279,13 @@ static void computeFunctionSummary(
   bool HasIndirBranchToBlockAddress = false;
   bool HasUnknownCall = false;
   bool MayThrow = false;
+  // [LittleLaGi]
+  auto GUID = F.getGUID();
+  assert(Index.DirectCallSiteCount->find(GUID) == Index.DirectCallSiteCount->end() && "Should be unique");
+  assert(Index.ComdatCalleeRecord->find(GUID) == Index.ComdatCalleeRecord->end() && "Should be unique");
+  DenseMap<GlobalValue::GUID, std::uint64_t> &DirectCallSiteCount = (*Index.DirectCallSiteCount)[GUID]; 
+  DenseMap<GlobalValue::GUID, std::uint64_t> &ComdatCalleeRecord = (*Index.ComdatCalleeRecord)[GUID];
+
   for (const BasicBlock &BB : F) {
     // We don't allow inlining of function with indirect branch to blockaddress.
     // If the blockaddress escapes the function, e.g., via a global variable,
@@ -365,6 +372,15 @@ static void computeFunctionSummary(
               TypeTestAssumeConstVCalls, TypeCheckedLoadConstVCalls, DT);
           continue;
         }
+        // [LittleLaGi] Check if this is a direct call to a known function
+        if (IsThinLTO && CI && !CalledFunction->isIntrinsic()) {
+          auto GUID = CalledFunction->getGUID();
+          if (!F.hasComdat())
+            DirectCallSiteCount[GUID] += 1;
+          else
+            ComdatCalleeRecord[GUID] += 1;
+        }
+          
         // We should have named any anonymous globals
         assert(CalledFunction->hasName());
         auto ScaledCount = PSI->getProfileCount(*CB, BFI);
@@ -511,6 +527,7 @@ static void computeFunctionSummary(
       TypeTestAssumeVCalls.takeVector(), TypeCheckedLoadVCalls.takeVector(),
       TypeTestAssumeConstVCalls.takeVector(),
       TypeCheckedLoadConstVCalls.takeVector(), std::move(ParamAccesses));
+  FuncSummary->HasCallSiteInlined = F.hasFnAttribute("HasCallSiteInlined");
   if (NonRenamableLocal)
     CantBePromoted.insert(F.getGUID());
   Index.addGlobalValueSummary(F, std::move(FuncSummary));
@@ -800,6 +817,12 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
     computeFunctionSummary(Index, M, F, BFI, PSI, DT,
                            !LocalsUsed.empty() || HasLocalInlineAsmSymbol,
                            CantBePromoted, IsThinLTO, GetSSICallback);
+  }
+
+  // [LittleLaGi] Collect call site information
+  for (auto &F : M) {
+    if (F.hasAddressTaken())
+      Index.PossibleIndirectCallFuncs->insert(F.getGUID());
   }
 
   // Compute summaries for all variables defined in module, and save in the

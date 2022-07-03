@@ -149,6 +149,9 @@ void ComputeCrossModuleImport(
     StringMap<FunctionImporter::ImportMapTy> &ImportLists,
     StringMap<FunctionImporter::ExportSetTy> &ExportLists);
 
+// [LittleLaGi]
+void ComputeSolitaryFunctions(const ModuleSummaryIndex &Index, DenseMap<GlobalValue::GUID, FunctionSummary*> &RootSummaries);
+
 /// Compute all the imports for the given module using the Index.
 ///
 /// \p ImportList will be populated with a map that can be passed to

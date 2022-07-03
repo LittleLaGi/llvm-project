@@ -931,6 +931,7 @@ PreservedAnalyses InlinerPass::run(LazyCallGraph::SCC &InitialC,
 
       DidInline = true;
       InlinedCallees.insert(&Callee);
+      Callee.addFnAttr("HasCallSiteInlined", "true");  // [LittleLaGi]
       ++NumInlined;
 
       LLVM_DEBUG(dbgs() << "    Size after inlining: "

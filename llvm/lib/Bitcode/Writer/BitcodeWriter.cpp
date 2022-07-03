@@ -206,6 +206,7 @@ public:
   }
 
 protected:
+  void writePerModuleCallSiteInfo();  // [LittleLaGi]
   void writePerModuleGlobalValueSummary();
 
 private:
@@ -3839,6 +3840,7 @@ void ModuleBitcodeWriterBase::writePerModuleFunctionSummaryRecord(
   NameVals.push_back(FS->refs().size());
   NameVals.push_back(SpecialRefCnts.first);  // rorefcnt
   NameVals.push_back(SpecialRefCnts.second); // worefcnt
+  NameVals.push_back(FS->HasCallSiteInlined); // [LittleLaGi]
 
   for (auto &RI : FS->refs())
     NameVals.push_back(VE.getValueID(RI.getValue()));
@@ -3909,6 +3911,53 @@ void ModuleBitcodeWriterBase::writeModuleLevelReferences(
   NameVals.clear();
 }
 
+// [LittleLaGi]
+void ModuleBitcodeWriterBase::writePerModuleCallSiteInfo() {
+  bool IsThinLTO = true;
+  if (auto *MD =
+          mdconst::extract_or_null<ConstantInt>(M.getModuleFlag("ThinLTO")))
+    IsThinLTO = MD->getZExtValue();
+  if (!IsThinLTO)
+    return;
+  
+  Stream.EnterSubblock(bitc::CALL_SITE_INFO_ID, 4);
+  SmallVector<uint64_t, 64> Record;
+
+  auto &DirectCallSiteCount = *Index->DirectCallSiteCount;
+  Record.push_back(DirectCallSiteCount.size());
+  for (auto &Func : DirectCallSiteCount) {
+    Record.push_back(Func.first);  // GUID
+    Record.push_back(Func.second.size());
+    for (auto &CalleeRecord : Func.second) {
+      Record.push_back(CalleeRecord.first);
+      Record.push_back(CalleeRecord.second);
+    }
+  }
+  Stream.EmitRecord(bitc::DIRECT_CALL_SITE_COUNT, Record);
+
+  Record.clear();
+  auto &PossibleIndirectCallFuncs = *Index->PossibleIndirectCallFuncs;
+  Record.push_back(PossibleIndirectCallFuncs.size());
+  for (auto GUID : PossibleIndirectCallFuncs)
+    Record.push_back(GUID);
+  Stream.EmitRecord(bitc::POSSIBLE_INDIEECT_CALL_FUNCS, Record);
+
+  Record.clear();
+  auto &ComdatCalleeRecord = *Index->ComdatCalleeRecord;
+  Record.push_back(ComdatCalleeRecord.size());  // NumComdatFunction
+  for (auto &ComdatFunc : ComdatCalleeRecord) {
+    Record.push_back(ComdatFunc.first);  // GUID
+    Record.push_back(ComdatFunc.second.size());
+    for (auto &CalleeRecord : ComdatFunc.second) {
+      Record.push_back(CalleeRecord.first);
+      Record.push_back(CalleeRecord.second);
+    }
+  }
+  Stream.EmitRecord(bitc::COMDAT_CALLEE_RECORD, Record);
+
+  Stream.ExitBlock();
+}
+
 /// Emit the per-module summary section alongside the rest of
 /// the module's bitcode.
 void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
@@ -3953,6 +4002,7 @@ void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // numrefs
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // rorefcnt
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // worefcnt
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // [LittleLaGi] HasCallSiteInlined
   // numrefs x valueid, n x (valueid, hotness)
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));
@@ -3971,6 +4021,7 @@ void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // numrefs
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // rorefcnt
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // worefcnt
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // [LittleLaGi] HasCallSiteInlined
   // numrefs x valueid, n x (valueid [, rel_block_freq])
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));
@@ -4441,6 +4492,8 @@ void ModuleBitcodeWriter::write() {
   // the summary information in the index.
   if (Index)
     writePerModuleGlobalValueSummary();
+  
+  writePerModuleCallSiteInfo();  // [LittleLaGi]
 
   writeGlobalValueSymbolTable(FunctionToBitcodeIndex);
 

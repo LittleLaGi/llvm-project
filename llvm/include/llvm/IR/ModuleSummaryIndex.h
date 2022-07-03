@@ -41,6 +41,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unordered_map>  // [LittleLaGi]
 
 namespace llvm {
 
@@ -706,6 +707,10 @@ private:
   using ParamAccessesTy = std::vector<ParamAccess>;
   std::unique_ptr<ParamAccessesTy> ParamAccesses;
 
+  // [LittleLaGi]
+public:
+  bool HasCallSiteInlined = false;
+
 public:
   FunctionSummary(GVFlags Flags, unsigned NumInsts, FFlags FunFlags,
                   uint64_t EntryCount, std::vector<ValueInfo> Refs,
@@ -744,6 +749,10 @@ public:
   void setNoRecurse() { FunFlags.NoRecurse = true; }
 
   void setNoUnwind() { FunFlags.NoUnwind = true; }
+
+  // [LittleLaGi]
+  void setAlwaysInline() { FunFlags.AlwaysInline = true; }
+  void setNoInline() { FunFlags.NoInline = true; }
 
   /// Get the instruction count recorded for this function.
   unsigned instCount() const { return InstCount; }
@@ -1170,10 +1179,26 @@ private:
   }
 
 public:
+  // [LittleLaGi]
+  std::unique_ptr<std::unordered_map<GlobalValue::GUID, DenseMap<GlobalValue::GUID, std::uint64_t>>> DirectCallSiteCount;
+  std::unique_ptr<std::unordered_map<GlobalValue::GUID, DenseMap<GlobalValue::GUID, std::uint64_t>>> ComdatCalleeRecord;
+  std::unique_ptr<DenseMap<GlobalValue::GUID, std::uint64_t>> CombinedDirectCallSiteCount;
+  std::unique_ptr<DenseSet<GlobalValue::GUID>> PossibleIndirectCallFuncs;
+  std::shared_ptr<DenseSet<GlobalValue::GUID>> ForcedInlineFuncsPtr;
+  std::shared_ptr<DenseSet<GlobalValue::GUID>> NoInlineFuncsPtr;
+
   // See HaveGVs variable comment.
   ModuleSummaryIndex(bool HaveGVs, bool EnableSplitLTOUnit = false)
       : HaveGVs(HaveGVs), EnableSplitLTOUnit(EnableSplitLTOUnit), Saver(Alloc),
-        BlockCount(0) {}
+        BlockCount(0) {
+          // [LittleLaGi]
+          DirectCallSiteCount = std::make_unique<std::unordered_map<GlobalValue::GUID, DenseMap<GlobalValue::GUID, std::uint64_t>>>();
+          ComdatCalleeRecord = std::make_unique<std::unordered_map<GlobalValue::GUID, DenseMap<GlobalValue::GUID, std::uint64_t>>>();
+          CombinedDirectCallSiteCount = std::make_unique<DenseMap<GlobalValue::GUID, std::uint64_t>>();
+          PossibleIndirectCallFuncs = std::make_unique<DenseSet<GlobalValue::GUID>>();
+          ForcedInlineFuncsPtr = std::make_shared<DenseSet<GlobalValue::GUID>>();
+          NoInlineFuncsPtr = std::make_shared<DenseSet<GlobalValue::GUID>>();
+        }
 
   // Current version for the module summary in bitcode files.
   // The BitcodeSummaryVersion should be bumped whenever we introduce changes

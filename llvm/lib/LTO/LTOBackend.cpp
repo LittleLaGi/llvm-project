@@ -661,6 +661,20 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
                             ClearDSOLocalOnDeclarations);
   if (Error Err = Importer.importFunctions(Mod, ImportList).takeError())
     return Err;
+  
+  // [LittleLaGi] drop original functions
+  // [LittleLaGi] force inline
+  for (auto &F : Mod) {
+    if (F.isDeclaration())
+      continue;
+    if (CombinedIndex.ForcedInlineFuncsPtr->find(F.getGUID()) != CombinedIndex.ForcedInlineFuncsPtr->end()) {
+      //F.setLinkage(GlobalValue::InternalLinkage);
+      // F.setVisibility(GlobalValue::DefaultVisibility);
+      F.addFnAttr(Attribute::AlwaysInline);
+    }
+    else if (CombinedIndex.NoInlineFuncsPtr->find(F.getGUID()) != CombinedIndex.NoInlineFuncsPtr->end())
+      F.addFnAttr(Attribute::NoInline);
+  }
 
   if (Conf.PostImportModuleHook && !Conf.PostImportModuleHook(Task, Mod))
     return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));

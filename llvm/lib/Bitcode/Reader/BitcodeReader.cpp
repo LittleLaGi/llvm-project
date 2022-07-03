@@ -798,6 +798,7 @@ private:
   void parseTypeIdCompatibleVtableSummaryRecord(ArrayRef<uint64_t> Record);
   void parseTypeIdCompatibleVtableInfo(ArrayRef<uint64_t> Record, size_t &Slot,
                                        TypeIdCompatibleVtableInfo &TypeId);
+  Error parseCallSiteInfo();
   std::vector<FunctionSummary::ParamAccess>
   parseParamAccesses(ArrayRef<uint64_t> Record);
 
@@ -5788,6 +5789,80 @@ void ModuleSummaryIndexBitcodeReader::setValueGUID(
       OriginalNameID);
 }
 
+// [LittleLaGi]
+Error ModuleSummaryIndexBitcodeReader::parseCallSiteInfo() {
+  if (Error Err = Stream.EnterSubBlock(bitc::CALL_SITE_INFO_ID))
+    return Err;
+  
+  SmallVector<uint64_t, 64> Record;
+
+  while (true) {
+    Expected<BitstreamEntry> MaybeEntry = Stream.advanceSkippingSubblocks();
+    if (!MaybeEntry)
+      return MaybeEntry.takeError();
+    BitstreamEntry Entry = MaybeEntry.get();
+
+    switch (Entry.Kind) {
+    case BitstreamEntry::SubBlock: // Handled for us already.
+    case BitstreamEntry::Error:
+      return error("Malformed block");
+    case BitstreamEntry::EndBlock:
+      return Error::success();
+    case BitstreamEntry::Record:
+      // The interesting case.
+      break;
+    }
+
+    // Read a record.
+    Record.clear();
+    Expected<unsigned> MaybeRecord = Stream.readRecord(Entry.ID, Record);
+    if (!MaybeRecord)
+      return MaybeRecord.takeError();
+    switch (MaybeRecord.get()) {
+    default: // Default behavior: ignore (e.g. VST_CODE_BBENTRY records).
+      break;
+    case bitc::DIRECT_CALL_SITE_COUNT: {
+      auto &DirectCallSiteCount = *TheIndex.DirectCallSiteCount;
+      uint64_t NumFuncs = Record[0];
+      uint64_t idx = 1;
+      for (uint64_t i = 0; i < NumFuncs; ++i) {
+        uint64_t GUID = Record[idx++];
+        uint64_t CalleeRecordSize = Record[idx++];
+        //assert(DirectCallSiteCount.find(GUID) == DirectCallSiteCount.end() && "Should be unique");
+        auto &CalleeRecord = DirectCallSiteCount[GUID];
+        for (uint64_t j = 0; j < CalleeRecordSize; ++j) {
+          CalleeRecord[Record[idx]] = Record[idx + 1];
+          idx += 2;
+        }
+      }
+      break;
+    }
+    case bitc::POSSIBLE_INDIEECT_CALL_FUNCS: {
+      auto &PossibleIndirectCallFuncs = *TheIndex.PossibleIndirectCallFuncs;
+      uint64_t NumIndirectFuncs = Record[0];
+      for (uint64_t i = 0; i < NumIndirectFuncs; ++i)
+        PossibleIndirectCallFuncs.insert(Record[i + 1]);
+      break;
+    }
+    case bitc::COMDAT_CALLEE_RECORD: {
+      auto &ComdatCalleeRecord = *TheIndex.ComdatCalleeRecord;
+      uint64_t NumComdatFuncs = Record[0];
+      uint64_t idx = 1;
+      for (uint64_t i = 0; i < NumComdatFuncs; ++i) {
+        uint64_t GUID = Record[idx++];
+        uint64_t CalleeRecordSize = Record[idx++];
+        for (uint64_t j = 0; j < CalleeRecordSize; ++j) {
+          auto curr_count = ComdatCalleeRecord[GUID][Record[idx]];
+          ComdatCalleeRecord[GUID][Record[idx]] = curr_count > Record[idx + 1] ? curr_count : Record[idx + 1];
+          idx += 2;
+        }
+      }
+      break;
+    }
+    }
+  }
+}
+
 // Specialized value symbol table parser used when reading module index
 // blocks where we don't actually create global values. The parsed information
 // is saved in the bitcode reader for use when later parsing summaries.
@@ -5947,6 +6022,10 @@ Error ModuleSummaryIndexBitcodeReader::parseModule() {
         break;
       case bitc::MODULE_STRTAB_BLOCK_ID:
         if (Error Err = parseModuleStringTable())
+          return Err;
+        break;
+      case bitc::CALL_SITE_INFO_ID:
+        if (Error Err = parseCallSiteInfo())
           return Err;
         break;
       }
@@ -6279,6 +6358,7 @@ Error ModuleSummaryIndexBitcodeReader::parseEntireSummary(unsigned ID) {
       unsigned NumRefs = Record[3];
       unsigned NumRORefs = 0, NumWORefs = 0;
       int RefListStartIndex = 4;
+      bool HasCallSiteInlined = false;  // [LittleLaGi]
       if (Version >= 4) {
         RawFunFlags = Record[3];
         NumRefs = Record[4];
@@ -6288,7 +6368,8 @@ Error ModuleSummaryIndexBitcodeReader::parseEntireSummary(unsigned ID) {
           RefListStartIndex = 6;
           if (Version >= 7) {
             NumWORefs = Record[6];
-            RefListStartIndex = 7;
+            HasCallSiteInlined = Record[7];  // [LittleLaGi]
+            RefListStartIndex = 8;
           }
         }
       }
@@ -6321,6 +6402,7 @@ Error ModuleSummaryIndexBitcodeReader::parseEntireSummary(unsigned ID) {
       auto VIAndOriginalGUID = getValueInfoFromValueId(ValueID);
       FS->setModulePath(getThisModule()->first());
       FS->setOriginalName(VIAndOriginalGUID.second);
+      FS->HasCallSiteInlined = HasCallSiteInlined;  // [LittleLaGi]
       TheIndex.addGlobalValueSummary(VIAndOriginalGUID.first, std::move(FS));
       break;
     }

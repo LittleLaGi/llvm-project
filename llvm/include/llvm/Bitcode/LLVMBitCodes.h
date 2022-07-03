@@ -60,6 +60,8 @@ enum BlockIDs {
   SYMTAB_BLOCK_ID,
 
   SYNC_SCOPE_NAMES_BLOCK_ID,
+
+  CALL_SITE_INFO_ID,
 };
 
 /// Identification block contains a string that describes the producer details,
@@ -298,6 +300,13 @@ enum GlobalValueSummarySymtabCodes {
   // Range information for accessed offsets for every argument.
   // [n x (paramno, range, numcalls, numcalls x (callee_guid, paramno, range))]
   FS_PARAM_ACCESS = 25,
+};
+
+// [LittleLaGi]
+enum CallSiteInfoCode {
+  DIRECT_CALL_SITE_COUNT = 1,
+  POSSIBLE_INDIEECT_CALL_FUNCS = 2,
+  COMDAT_CALLEE_RECORD = 3,
 };
 
 enum MetadataCodes {

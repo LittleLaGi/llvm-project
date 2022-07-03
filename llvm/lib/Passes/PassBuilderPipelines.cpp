@@ -865,7 +865,8 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   EarlyFPM.addPass(SROAPass());
   EarlyFPM.addPass(EarlyCSEPass());
   EarlyFPM.addPass(CoroEarlyPass());
-  if (Level == OptimizationLevel::O3)
+  // [LittleLaGi]
+  if (Phase != ThinOrFullLTOPhase::ThinLTOPostLink && Level == OptimizationLevel::O3)
     EarlyFPM.addPass(CallSiteSplittingPass());
 
   // In SamplePGO ThinLTO backend, we need instcombine before profile annotation
