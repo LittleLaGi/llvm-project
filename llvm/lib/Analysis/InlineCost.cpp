@@ -42,6 +42,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/raw_ostream.h"
+// [LittleLaGi]
+#include "llvm/Analysis/ScalarEvolution.h"
 
 using namespace llvm;
 
@@ -209,6 +211,9 @@ protected:
   /// Getter for the cache of @llvm.assume intrinsics.
   function_ref<AssumptionCache &(Function &)> GetAssumptionCache;
 
+  // [LittleLaGi]
+  function_ref<const TargetLibraryInfo &(Function &)> GetTLI;
+  
   /// Getter for BlockFrequencyInfo
   function_ref<BlockFrequencyInfo &(Function &)> GetBFI;
 
@@ -228,6 +233,12 @@ protected:
   /// analysis in the caller function; we want the inline cost query to be
   /// easily cacheable. Instead, use the cover function paramHasAttr.
   CallBase &CandidateCall;
+
+  // [LittleLaGi] The loop contains the callbase. Null if the callbase is not in a loop.
+  Loop *L;
+
+  // [LittleLaGi] induction vars of caller/callee loops and args
+  DenseSet<Value*> LoopInductionVars;
 
   /// Extension points for handling callsite features.
   // Called before a basic block was analyzed.
@@ -460,6 +471,93 @@ public:
       : TTI(TTI), GetAssumptionCache(GetAssumptionCache), GetBFI(GetBFI),
         PSI(PSI), F(Callee), DL(F.getParent()->getDataLayout()), ORE(ORE),
         CandidateCall(Call) {}
+  
+  // [LittleLaGi]
+  CallAnalyzer(Function &Callee, CallBase &Call, const TargetTransformInfo &TTI,
+               function_ref<AssumptionCache &(Function &)> GetAssumptionCache,
+               function_ref<const TargetLibraryInfo &(Function &)> GetTLI,
+               function_ref<BlockFrequencyInfo &(Function &)> GetBFI = nullptr,
+               ProfileSummaryInfo *PSI = nullptr,
+               OptimizationRemarkEmitter *ORE = nullptr)
+      : TTI(TTI), GetAssumptionCache(GetAssumptionCache), GetTLI(GetTLI), GetBFI(GetBFI),
+        PSI(PSI), F(Callee), DL(F.getParent()->getDataLayout()), ORE(ORE),
+        CandidateCall(Call) {}
+
+  // [LittleLaGi]
+  int getCallsiteOverhead(CallBase &Call, const DataLayout &DL) {
+    const int SizeMovq = 3;
+    const int SizeCallInst = 5;
+    int Cost = 0;
+    for (unsigned I = 0, E = Call.arg_size(); I != E; ++I) {
+      if (Call.isByValArgument(I)) {
+        PointerType *PTy = cast<PointerType>(Call.getArgOperand(I)->getType());
+        unsigned TypeSize = DL.getTypeSizeInBits(Call.getParamByValType(I));
+        unsigned AS = PTy->getAddressSpace();
+        unsigned PointerSize = DL.getPointerSizeInBits(AS);
+        unsigned NumStores = (TypeSize + PointerSize - 1) / PointerSize;
+        NumStores = std::min(NumStores, 8U);
+        Cost += NumStores * SizeMovq;
+      } else {
+        Cost += SizeMovq;
+      }
+    }
+    Cost += SizeCallInst;
+    // TODO: calling convention?
+    return Cost;
+  }
+
+  // [LittleLaGi]
+  InlineResult finalizeSolitaryAnalysis() {
+    const unsigned SolitaryFunctionThreshold = 600;
+    const unsigned MaxHoistedThreshold = 50;
+    InstructionCost ReducedSize = SizeSimplifiedInstructions + getCallsiteOverhead(this->CandidateCall, DL);
+    for (auto *DeadBB : DeadBlocks) {
+      for (auto &I : *DeadBB)
+        ReducedSize += TTI.getInstructionCost(&I, TTI.TargetCostKind::TCK_CodeSize);
+    }
+    InstructionCost RegisterSpillSize = NumInstructionsMayBeHoisted * 4;
+    bool SpillCondition = NumInstructionsMayBeHoisted <= 10
+                          || NumInstructionsMayBeHoisted <= F.getInstructionCount() - NumRealInstructions
+                          || NumInstructionsMayBeHoisted + NumParentLoopInvariantVars <= 400;
+    //DEBUG_WITH_TYPE("lagi-inliner", dbgs() << F.getName() << ": " << EstimatedCodeSize << ", " << ReducedSize << ", " << NumInstructionsSimplified << "\n");
+    Function *Caller = CandidateCall.getFunction();
+    if (NumInstructions <= SolitaryFunctionThreshold && SpillCondition) {
+      return InlineResult::success();
+    }
+    else
+      return InlineResult::failure("[Solitary] Cost over threshold.");
+  }
+
+  // [LittleLaGi] steal & modified from LICM.cpp
+  bool isHoistableAndSinkableInst(Instruction &I) {
+    // Only these instructions are hoistable/sinkable.
+    return (isa<LoadInst>(I) || isa<StoreInst>(I) || isa<CallInst>(I) ||
+            isa<FenceInst>(I) || isa<CastInst>(I) || isa<UnaryOperator>(I) ||
+            isa<BinaryOperator>(I) || isa<SelectInst>(I) ||
+            isa<GetElementPtrInst>(I) || isa<CmpInst>(I) ||
+            isa<InsertElementInst>(I) || isa<ExtractElementInst>(I) ||
+            isa<ShuffleVectorInst>(I) || isa<ExtractValueInst>(I) ||
+            isa<InsertValueInst>(I) || isa<FreezeInst>(I));
+  }
+
+  // [LittleLaGi] steal & modified from LoopInfo.cpp
+  bool isLoopInvariant(Value *V) {
+    if (!V)
+      return true;
+    // TODO: canSinkOrHoistInst()?
+    if (Instruction *I = dyn_cast<Instruction>(V)) {
+      if (!isHoistableAndSinkableInst(*I))
+        return false;
+      for (Value *Operand : I->operands())
+        if (!isLoopInvariant(Operand))
+          return false;
+    }
+    else {
+      if (LoopInductionVars.count(V)) 
+        return false;
+    }
+    return true;
+  }
 
   InlineResult analyze();
 
@@ -477,6 +575,12 @@ public:
   unsigned NumConstantPtrCmps = 0;
   unsigned NumConstantPtrDiffs = 0;
   unsigned NumInstructionsSimplified = 0;
+  // [LittleLaGi]
+  unsigned NumParentLoopInvariantVars = 0;
+  unsigned NumInstructionsMayBeHoisted = 0;
+  unsigned NumRealInstructions = 0;
+  InstructionCost EstimatedCodeSize = 0;
+  InstructionCost SizeSimplifiedInstructions = 0;
 
   void dump();
 };
@@ -917,6 +1021,10 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
             getStringFnAttrAsInt(CandidateCall, "function-inline-threshold"))
       Threshold = *AttrThreshold;
 
+    // [LittleLaGi]
+    if (F.hasFnAttribute("Solitary"))
+      return finalizeSolitaryAnalysis();
+
     if (auto Result = costBenefitAnalysis()) {
       DecidedByCostBenefit = true;
       if (Result.getValue())
@@ -935,7 +1043,8 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
   }
 
   bool shouldStop() override {
-    if (IgnoreThreshold || ComputeFullInlineCost)
+    // [LittleLaGi] no early return for solitary functions
+    if (IgnoreThreshold || ComputeFullInlineCost || F.hasFnAttribute("Solitary"))
       return false;
     // Bail out the moment we cross the threshold. This means we'll under-count
     // the cost, but only when undercounting doesn't matter.
@@ -1004,6 +1113,27 @@ public:
       OptimizationRemarkEmitter *ORE = nullptr, bool BoostIndirect = true,
       bool IgnoreThreshold = false)
       : CallAnalyzer(Callee, Call, TTI, GetAssumptionCache, GetBFI, PSI, ORE),
+        ComputeFullInlineCost(OptComputeFullInlineCost ||
+                              Params.ComputeFullInlineCost || ORE ||
+                              isCostBenefitAnalysisEnabled()),
+        Params(Params), Threshold(Params.DefaultThreshold),
+        BoostIndirectCalls(BoostIndirect), IgnoreThreshold(IgnoreThreshold),
+        CostBenefitAnalysisEnabled(isCostBenefitAnalysisEnabled()),
+        Writer(this) {
+    AllowRecursiveCall = Params.AllowRecursiveCall.getValue();
+  }
+
+  // [LittleLaGi]
+  InlineCostCallAnalyzer(
+      Function &Callee, CallBase &Call, const InlineParams &Params,
+      const TargetTransformInfo &TTI,
+      function_ref<AssumptionCache &(Function &)> GetAssumptionCache,
+      function_ref<const TargetLibraryInfo &(Function &)> GetTLI,
+      function_ref<BlockFrequencyInfo &(Function &)> GetBFI = nullptr,
+      ProfileSummaryInfo *PSI = nullptr,
+      OptimizationRemarkEmitter *ORE = nullptr, bool BoostIndirect = true,
+      bool IgnoreThreshold = false)
+      : CallAnalyzer(Callee, Call, TTI, GetAssumptionCache, GetTLI, GetBFI, PSI, ORE),
         ComputeFullInlineCost(OptComputeFullInlineCost ||
                               Params.ComputeFullInlineCost || ORE ||
                               isCostBenefitAnalysisEnabled()),
@@ -1903,6 +2033,7 @@ void InlineCostCallAnalyzer::updateThreshold(CallBase &Call, Function &Callee) {
   SingleBBBonus = Threshold * SingleBBBonusPercent / 100;
   VectorBonus = Threshold * VectorBonusPercent / 100;
 
+  // [LittleLaGi]
   bool OnlyOneCallAndLocalLinkage = F.hasLocalLinkage() && F.hasOneLiveUse() &&
                                     &F == Call.getCalledFunction();
   // If there is only one call of the function, and it has internal linkage,
@@ -2439,6 +2570,19 @@ CallAnalyzer::analyzeBlock(BasicBlock *BB,
     else
       onMissedSimplification();
 
+    // [LittleLaGi]
+    if (F.hasFnAttribute("Solitary")) {
+      auto C = getSimplifiedValue(const_cast<Instruction *>(&I));
+      if (!C) {
+        NumRealInstructions += 1;
+        EstimatedCodeSize += TTI.getInstructionCost(&I, TTI.TargetCostKind::TCK_CodeSize);
+        if (this->L && isLoopInvariant(&I))
+          NumInstructionsMayBeHoisted += 1;
+      }
+      else
+        SizeSimplifiedInstructions += TTI.getInstructionCost(&I, TTI.TargetCostKind::TCK_CodeSize);
+    }
+
     onInstructionAnalysisFinish(&I);
     using namespace ore;
     // If the visit this instruction detected an uninlinable pattern, abort.
@@ -2580,8 +2724,56 @@ void CallAnalyzer::findDeadBlocks(BasicBlock *CurrBB, BasicBlock *NextBB) {
 InlineResult CallAnalyzer::analyze() {
   ++NumCallsAnalyzed;
 
+  // [LittleLaGi]
+  if (F.hasFnAttribute("Solitary")) {
+    this->L = nullptr;
+    Function *Caller = CandidateCall.getFunction();
+    DominatorTree DT(*Caller);
+    LoopInfo LI(DT);
+    std::list<Loop*> WorkList;
+    for (Loop *L : LI)  // top level loops
+      WorkList.push_back(L);
+    while (!WorkList.empty()) {
+      Loop *L = WorkList.front();
+      WorkList.pop_front();
+      for (auto &BB : L->getBlocks()) {
+        if (CandidateCall.getParent() == BB) {
+          this->L = L;
+          break;
+       }
+     }
+      if (this->L)
+        break;
+      for (Loop *SubLoop : L->getSubLoops())
+        WorkList.push_back(SubLoop);
+    }
+
+    if (this->L) {
+      ScalarEvolution SE(*Caller, const_cast<TargetLibraryInfo&>(GetTLI(*Caller)),
+                        GetAssumptionCache(*Caller), DT, LI);
+      Value *InductionVar = this->L->getInductionVariable(SE);
+      if (InductionVar)
+        LoopInductionVars.insert(InductionVar);
+      
+      WorkList.push_back(this->L);
+      while (!WorkList.empty()) {
+        Loop *L = WorkList.front();
+        WorkList.pop_front();
+        for (auto BB : L->getBlocks()) {
+          for (auto &I : *BB) {
+            if (isLoopInvariant(&I))
+              NumParentLoopInvariantVars += 1;
+          }
+        }   
+        for (Loop *SubLoop : L->getSubLoops())
+          WorkList.push_back(SubLoop);
+      }
+    }
+  }
+
   auto Result = onAnalysisStart();
-  if (!Result.isSuccess())
+  // [LittleLaGi] no early return for solitary functions
+  if (!Result.isSuccess() && !F.hasFnAttribute("Solitary"))
     return Result;
 
   if (F.empty())
@@ -2616,11 +2808,39 @@ InlineResult CallAnalyzer::analyze() {
         EnabledSROAAllocas.insert(SROAArg);
       }
     }
+
+    // [LittleLaGi]
+    if (this->L && F.hasFnAttribute("Solitary")) {
+      if (!isLoopInvariant(PtrArg))
+        LoopInductionVars.insert(&FAI);
+    }
+    
     ++CAI;
   }
   NumConstantArgs = SimplifiedValues.size();
   NumConstantOffsetPtrArgs = ConstantOffsetPtrs.size();
   NumAllocaArgs = SROAArgValues.size();
+
+  // [LittleLaGi]
+  if (F.hasFnAttribute("Solitary")) {
+    DominatorTree DT(F);
+    LoopInfo LI(DT);
+    std::list<Loop*> WorkList;
+    for (Loop *L : LI)  // top level loops
+      WorkList.push_back(L);
+    while (!WorkList.empty()) {
+      Loop *L = WorkList.front();
+      WorkList.pop_front();
+      
+      ScalarEvolution SE(F, const_cast<TargetLibraryInfo&>(GetTLI(F)), GetAssumptionCache(F), DT, LI);
+      Value *InductionVar = L->getInductionVariable(SE);
+      if (InductionVar)
+        LoopInductionVars.insert(InductionVar);
+      
+      for (Loop *SubLoop : L->getSubLoops())
+        WorkList.push_back(SubLoop);
+    }
+  }
 
   // FIXME: If a caller has multiple calls to a callee, we end up recomputing
   // the ephemeral values multiple times (and they're completely determined by
@@ -2668,7 +2888,8 @@ InlineResult CallAnalyzer::analyze() {
     // Analyze the cost of this block. If we blow through the threshold, this
     // returns false, and we can bail on out.
     InlineResult IR = analyzeBlock(BB, EphValues);
-    if (!IR.isSuccess())
+    // [LittleLaGi] no early return for solitary functions
+    if (!IR.isSuccess() && !F.hasFnAttribute("Solitary"))
       return IR;
 
     Instruction *TI = BB->getTerminator();
@@ -2930,8 +3151,9 @@ InlineCost llvm::getInlineCost(
                           << "... (caller:" << Call.getCaller()->getName()
                           << ")\n");
 
+  // [LittleLaGi]
   InlineCostCallAnalyzer CA(*Callee, Call, Params, CalleeTTI,
-                            GetAssumptionCache, GetBFI, PSI, ORE);
+                            GetAssumptionCache, GetTLI, GetBFI, PSI, ORE);
   InlineResult ShouldInline = CA.analyze();
 
   LLVM_DEBUG(CA.dump());

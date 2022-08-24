@@ -710,6 +710,7 @@ private:
   // [LittleLaGi]
 public:
   bool HasCallSiteInlined = false;
+  bool visited = false;
 
 public:
   FunctionSummary(GVFlags Flags, unsigned NumInsts, FFlags FunFlags,
@@ -1185,7 +1186,7 @@ public:
   std::unique_ptr<DenseMap<GlobalValue::GUID, std::uint64_t>> CombinedDirectCallSiteCount;
   std::unique_ptr<DenseSet<GlobalValue::GUID>> PossibleIndirectCallFuncs;
   std::shared_ptr<DenseSet<GlobalValue::GUID>> ForcedInlineFuncsPtr;
-  std::shared_ptr<DenseSet<GlobalValue::GUID>> NoInlineFuncsPtr;
+  std::shared_ptr<DenseSet<GlobalValue::GUID>> MoveOnlyFuncsPtr;
 
   // See HaveGVs variable comment.
   ModuleSummaryIndex(bool HaveGVs, bool EnableSplitLTOUnit = false)
@@ -1197,7 +1198,7 @@ public:
           CombinedDirectCallSiteCount = std::make_unique<DenseMap<GlobalValue::GUID, std::uint64_t>>();
           PossibleIndirectCallFuncs = std::make_unique<DenseSet<GlobalValue::GUID>>();
           ForcedInlineFuncsPtr = std::make_shared<DenseSet<GlobalValue::GUID>>();
-          NoInlineFuncsPtr = std::make_shared<DenseSet<GlobalValue::GUID>>();
+          MoveOnlyFuncsPtr = std::make_shared<DenseSet<GlobalValue::GUID>>();
         }
 
   // Current version for the module summary in bitcode files.

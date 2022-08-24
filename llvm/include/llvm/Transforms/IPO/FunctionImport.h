@@ -150,7 +150,7 @@ void ComputeCrossModuleImport(
     StringMap<FunctionImporter::ExportSetTy> &ExportLists);
 
 // [LittleLaGi]
-void ComputeSolitaryFunctions(const ModuleSummaryIndex &Index, DenseMap<GlobalValue::GUID, FunctionSummary*> &RootSummaries);
+void ComputeSolitaryFunctions(const ModuleSummaryIndex &Index, FunctionSummary *MainFS, std::set<GlobalVariable::GUID> &CallSiteSingleCaller);
 
 /// Compute all the imports for the given module using the Index.
 ///

@@ -654,93 +654,49 @@ checkVariableImport(const ModuleSummaryIndex &Index,
 #endif
 
 // [LittleLaGi]
-void llvm::ComputeSolitaryFunctions(const ModuleSummaryIndex &Index, DenseMap<GlobalValue::GUID, FunctionSummary*> &RootSummaries) {
+void llvm::ComputeSolitaryFunctions(const ModuleSummaryIndex &Index, FunctionSummary *MainFS, std::set<GlobalVariable::GUID> &CallSiteSingleCaller) {
   auto &CombinedDirectCallSiteCount = *Index.CombinedDirectCallSiteCount;
   auto &PossibleIndirectCallFuncs = *Index.PossibleIndirectCallFuncs;
-  auto &ComdatCalleeRecord = *Index.ComdatCalleeRecord;
 
-  // Debug
-  auto GetGlobalVariableName = [&Index](GlobalValue::GUID ID) {
-    auto VI = Index.getValueInfo(ID);
-    return VI? VI.name() : StringRef("None");
-  };
-  LLVM_DEBUG(dbgs() << "[Debug] direct call site count:\n");
-  for (auto &CallSiteCount : CombinedDirectCallSiteCount) {
-    auto VI = Index.getValueInfo(CallSiteCount.first);
-    if (VI && VI.getSummaryList().size() > 1) {
-      LLVM_DEBUG(dbgs() << "!!More than one summary!! ");
-    }
-    LLVM_DEBUG(dbgs() << GetGlobalVariableName(CallSiteCount.first) << ": " << CallSiteCount.second << "\n");
-  }
-  LLVM_DEBUG(dbgs() << "[Debug] possible indirect call functions:\n");
-  for (auto Func : PossibleIndirectCallFuncs)
-    LLVM_DEBUG(dbgs() << GetGlobalVariableName(Func) << "\n");
-  LLVM_DEBUG(dbgs() << "[Debug] comdat functions:\n");
-  for (auto &ComdatFunc : ComdatCalleeRecord)
-    LLVM_DEBUG(dbgs() << GetGlobalVariableName(ComdatFunc.first) << ": " << ComdatFunc.second.size() << "\n");
-  LLVM_DEBUG(dbgs() << "[Debug] root summaries:\n");
-  for (auto &Root : RootSummaries)
-    LLVM_DEBUG(dbgs() << GetGlobalVariableName(Root.first) << "\n");
+  std::list<std::pair<GlobalVariable::GUID, FunctionSummary*>> SummaryList;
+  SummaryList.push_back({0, MainFS});
+  const unsigned SolitaryFunctionThreshold = 600;
+  while (!SummaryList.empty()) {
+    auto CallerSummaryPair = SummaryList.front();
+    auto CallerGUID = CallerSummaryPair.first;
+    auto CallerSummary = CallerSummaryPair.second;
+    SummaryList.pop_front();
 
-  // Force inline
-  LLVM_DEBUG(dbgs() << "[LittleLaGi]\n");
-  const int Threashold = 15000;  // LastCallToStaticBonus (InlineCost.h)
-  for (auto &Root : RootSummaries) {
-    std::queue<FunctionSummary*> Worklist;  // FIXME: use priority queue -> small function first
-    Worklist.push(Root.second);
-    int CurrentCost = 0;
-    while (!Worklist.empty() && CurrentCost <= Threashold) {
-      auto Summary = Worklist.front();
-      Worklist.pop();
-      for (auto &Edge : Summary->calls()) {
-        ValueInfo VI = Edge.first;
-        auto GUID = VI.getGUID();
-        // steal some code from selectCallee
-        for (const std::unique_ptr<GlobalValueSummary> &SummaryPtr : VI.getSummaryList()) {
-          auto *GVSummary = SummaryPtr.get();
-          auto VI = Index.getValueInfo(GVSummary->getOriginalName());
-          if (!VI)
-            continue;
-          if (!Index.isGlobalValueLive(GVSummary))
-            continue; 
-          LLVM_DEBUG(dbgs() << VI.name() << ": ");
-          const auto &CallSiteRecordIter = CombinedDirectCallSiteCount.find(GUID);
-          if (CallSiteRecordIter == CombinedDirectCallSiteCount.end()) {
-            LLVM_DEBUG(dbgs() << "error! callsite count not found!\n");
-            continue;
-          }
-          if (CallSiteRecordIter->second > 1) {
-            LLVM_DEBUG(dbgs() << "More than one direct call site: " << CallSiteRecordIter->second << "\n");
-            continue;
-          }
-          if (CallSiteRecordIter->second == 0) {
-            LLVM_DEBUG(dbgs() << "No direct call site\n");
-            continue;
-          }
-          if (PossibleIndirectCallFuncs.find(GUID) != PossibleIndirectCallFuncs.end()) {
-            LLVM_DEBUG(dbgs() << "Possible indirect call\n");
-            continue;
-          }
-          if (Summary->fflags().NoInline) {
-            LLVM_DEBUG(dbgs() << "No inline\n");
-            continue;
-          }
-          auto *Summary = cast<FunctionSummary>(GVSummary->getBaseObject());
-          if (Summary->HasCallSiteInlined) {
-            LLVM_DEBUG(dbgs() << "Has call site inlined\n");
-            break;
-          }
-          LLVM_DEBUG(dbgs() << "Force inline\n");
-          DEBUG_WITH_TYPE("lagi-inliner", dbgs() << VI.name() << "\n");
-          CurrentCost += Summary->instCount();
-          Summary->setAlwaysInline();
-          Index.ForcedInlineFuncsPtr->insert(GUID);
-          break;
+    if (CallerSummary->visited)
+        continue;
+    CallerSummary->visited = true;  
+    if (CallerSummary != MainFS) {
+      if (PossibleIndirectCallFuncs.find(CallerGUID) == PossibleIndirectCallFuncs.end()) {
+        const unsigned CallSiteCount = CombinedDirectCallSiteCount[CallerGUID];
+        const unsigned InstCount = CallerSummary->instCount();
+        if (CallSiteCount == 1 && InstCount != 0 && InstCount <= SolitaryFunctionThreshold) {
+          CallerSummary->setAlwaysInline();
+          Index.MoveOnlyFuncsPtr->insert(CallerGUID);
         }
       }
     }
+
+    for (auto &Edge : CallerSummary->calls()) {
+      ValueInfo VI = Edge.first;
+      if (!VI)
+        continue;
+      if (VI.getSummaryList().size() != 1)  // skip comdat function for now
+        continue;
+      const std::unique_ptr<GlobalValueSummary> &SummaryPtr = VI.getSummaryList()[0];
+      auto *GVSummary = SummaryPtr.get();
+      if (!Index.isGlobalValueLive(GVSummary))
+        continue;
+      auto *CurrSummary = dyn_cast<FunctionSummary>(GVSummary->getBaseObject());
+      if (!CurrSummary)
+        continue;
+      SummaryList.push_back({VI.getGUID(), CurrSummary});
+    }
   }
-  LLVM_DEBUG(dbgs() << "[LittleLaGi]\n");
 }
 
 /// Compute all the import and export for every module using the Index.
@@ -752,8 +708,9 @@ void llvm::ComputeCrossModuleImport(
 
   // [LittleLaGi]
   auto &CombinedDirectCallSiteCount = *Index.CombinedDirectCallSiteCount;
-  DenseMap<GlobalValue::GUID, FunctionSummary*> RootSummaries;
-  bool HasMainFunction = false;
+  FunctionSummary *MainFS = nullptr;
+  std::set<GlobalVariable::GUID> CallSiteSingleCaller;
+  std::set<GlobalVariable::GUID> BlackList;
   for (auto &DefinedGVSummaries : ModuleToDefinedGVSummaries) {
     for (auto &GVSummary : DefinedGVSummaries.second) {
       auto *FuncSummary = dyn_cast<FunctionSummary>(GVSummary.second->getBaseObject());
@@ -764,37 +721,43 @@ void llvm::ComputeCrossModuleImport(
         auto VI = Index.getValueInfo(GUID);
         // Combine direct call site count
         if (Index.DirectCallSiteCount->find(GUID) != Index.DirectCallSiteCount->end()) {
-          for (auto &CallSiteCount : (*Index.DirectCallSiteCount)[GUID])
+          for (auto &CallSiteCount : (*Index.DirectCallSiteCount)[GUID]) {
             CombinedDirectCallSiteCount[CallSiteCount.first] += CallSiteCount.second;
+            if (BlackList.find(GUID) != BlackList.end())
+              continue;
+            else {
+              if (CallSiteSingleCaller.find(GUID) != CallSiteSingleCaller.end()) {
+                CallSiteSingleCaller.erase(GUID);
+                BlackList.insert(GUID);
+              }
+              else
+                CallSiteSingleCaller.insert(GUID);
+            }
+          }
         }
         if (Index.ComdatCalleeRecord->find(GUID) != Index.ComdatCalleeRecord->end()) {
-          for (auto &CallSiteCount : (*Index.ComdatCalleeRecord)[GUID])
+          for (auto &CallSiteCount : (*Index.ComdatCalleeRecord)[GUID]) {
             CombinedDirectCallSiteCount[CallSiteCount.first] += CallSiteCount.second;
+            if (BlackList.find(GUID) != BlackList.end())
+              continue;
+            else {
+              if (CallSiteSingleCaller.find(GUID) != CallSiteSingleCaller.end()) {
+                CallSiteSingleCaller.erase(GUID);
+                BlackList.insert(GUID);
+              }
+              else
+                CallSiteSingleCaller.insert(GUID);
+            }
+          }
         }
-        // Collect root summaries
-        if (VI.name() == "main") { // name mangling?
-          HasMainFunction = true;
-          RootSummaries[GVSummary .first] = FuncSummary;
-        }
-        else {
-          if (FuncSummary->HasCallSiteInlined)
-            continue;
-          if (CombinedDirectCallSiteCount[GUID] > 1)
-            continue;
-          if (FuncSummary->instCount() > 100 // ImportInstrLimit
-                || GlobalValue::isInterposableLinkage((GVSummary.second)->linkage())
-                || FuncSummary->notEligibleToImport()
-                || FuncSummary->fflags().NoInline)
-            // FIXME: Comdat functions may have multiple summaries
-            // FIXME: Don't include solitary functions
-            RootSummaries[GVSummary .first] = FuncSummary; 
-        }
+        if (VI.name() == "main")
+          MainFS = FuncSummary;
       }
     }
   }
 
-  if (HasMainFunction)
-    ComputeSolitaryFunctions(Index, RootSummaries);
+  if (MainFS)
+    ComputeSolitaryFunctions(Index, MainFS, CallSiteSingleCaller);
   
   // For each module that has function defined, compute the import/export lists.
   for (auto &DefinedGVSummaries : ModuleToDefinedGVSummaries) {

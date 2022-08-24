@@ -668,12 +668,16 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
     if (F.isDeclaration())
       continue;
     if (CombinedIndex.ForcedInlineFuncsPtr->find(F.getGUID()) != CombinedIndex.ForcedInlineFuncsPtr->end()) {
-      //F.setLinkage(GlobalValue::InternalLinkage);
-      // F.setVisibility(GlobalValue::DefaultVisibility);
+      F.setLinkage(GlobalValue::InternalLinkage);
+      F.setVisibility(GlobalValue::DefaultVisibility);  // Necessary!
       F.addFnAttr(Attribute::AlwaysInline);
+      F.addFnAttr("Solitary", "default");
     }
-    else if (CombinedIndex.NoInlineFuncsPtr->find(F.getGUID()) != CombinedIndex.NoInlineFuncsPtr->end())
-      F.addFnAttr(Attribute::NoInline);
+    else if (CombinedIndex.MoveOnlyFuncsPtr->find(F.getGUID()) != CombinedIndex.MoveOnlyFuncsPtr->end()) {
+      F.setLinkage(GlobalValue::InternalLinkage);
+      F.setVisibility(GlobalValue::DefaultVisibility);  // Necessary!
+      F.addFnAttr("Solitary", "default");
+    }
   }
 
   if (Conf.PostImportModuleHook && !Conf.PostImportModuleHook(Task, Mod))
