@@ -240,6 +240,10 @@ protected:
   // [LittleLaGi] induction vars of caller/callee loops and args
   DenseSet<Value*> LoopInductionVars;
 
+  // [LittleLaGi]
+  DenseSet<BasicBlock*> PreDomBBs;
+  DenseSet<BasicBlock*> SucDomBBs;
+
   /// Extension points for handling callsite features.
   // Called before a basic block was analyzed.
   virtual void onBlockStart(const BasicBlock *BB) {}
@@ -508,19 +512,20 @@ public:
 
   // [LittleLaGi]
   InlineResult finalizeSolitaryAnalysis() {
-    const unsigned SolitaryFunctionThreshold = 600;
-    const unsigned MaxHoistedThreshold = 50;
+    const unsigned SolitaryFunctionThreshold = 700;
     InstructionCost ReducedSize = SizeSimplifiedInstructions + getCallsiteOverhead(this->CandidateCall, DL);
     for (auto *DeadBB : DeadBlocks) {
       for (auto &I : *DeadBB)
         ReducedSize += TTI.getInstructionCost(&I, TTI.TargetCostKind::TCK_CodeSize);
     }
     InstructionCost RegisterSpillSize = NumInstructionsMayBeHoisted * 4;
-    bool SpillCondition = NumInstructionsMayBeHoisted <= 10
-                          || NumInstructionsMayBeHoisted <= F.getInstructionCount() - NumRealInstructions
-                          || NumInstructionsMayBeHoisted + NumParentLoopInvariantVars <= 400;
-    //DEBUG_WITH_TYPE("lagi-inliner", dbgs() << F.getName() << ": " << EstimatedCodeSize << ", " << ReducedSize << ", " << NumInstructionsSimplified << "\n");
+    // bool SpillCondition = NumInstructionsMayBeHoisted <= 10
+    //                       || NumInstructionsMayBeHoisted <= F.getInstructionCount() - NumRealInstructions
+    //                       || NumInstructionsMayBeHoisted + NumParentLoopInvariantVars <= 50;
+    bool SpillCondition = NumInstructionsMayBeHoisted + NumParentLoopInvariantVars <= 0;
+    bool LiveRangeCondition = NumInterruptedLiveRanges <= 0;
     Function *Caller = CandidateCall.getFunction();
+    // DEBUG_WITH_TYPE("lagi-inliner", dbgs() << F.getName() << ": " << NumInterruptedLiveRanges << "\n");
     if (NumInstructions <= SolitaryFunctionThreshold && SpillCondition) {
       return InlineResult::success();
     }
@@ -579,6 +584,7 @@ public:
   unsigned NumParentLoopInvariantVars = 0;
   unsigned NumInstructionsMayBeHoisted = 0;
   unsigned NumRealInstructions = 0;
+  unsigned NumInterruptedLiveRanges = 0;
   InstructionCost EstimatedCodeSize = 0;
   InstructionCost SizeSimplifiedInstructions = 0;
 
@@ -2033,7 +2039,6 @@ void InlineCostCallAnalyzer::updateThreshold(CallBase &Call, Function &Callee) {
   SingleBBBonus = Threshold * SingleBBBonusPercent / 100;
   VectorBonus = Threshold * VectorBonusPercent / 100;
 
-  // [LittleLaGi]
   bool OnlyOneCallAndLocalLinkage = F.hasLocalLinkage() && F.hasOneLiveUse() &&
                                     &F == Call.getCalledFunction();
   // If there is only one call of the function, and it has internal linkage,
@@ -2740,8 +2745,8 @@ InlineResult CallAnalyzer::analyze() {
         if (CandidateCall.getParent() == BB) {
           this->L = L;
           break;
-       }
-     }
+        }
+      }
       if (this->L)
         break;
       for (Loop *SubLoop : L->getSubLoops())
@@ -2755,6 +2760,7 @@ InlineResult CallAnalyzer::analyze() {
       if (InductionVar)
         LoopInductionVars.insert(InductionVar);
       
+      WorkList.clear();
       WorkList.push_back(this->L);
       while (!WorkList.empty()) {
         Loop *L = WorkList.front();
@@ -2767,6 +2773,49 @@ InlineResult CallAnalyzer::analyze() {
         }   
         for (Loop *SubLoop : L->getSubLoops())
           WorkList.push_back(SubLoop);
+      }
+    }
+
+    // live range
+    DenseSet<Instruction*> PredecessorInsts;
+    Instruction *TargetInst = dyn_cast<Instruction>(&CandidateCall);
+    BasicBlock *TargetBB = CandidateCall.getParent();
+    for (Instruction &I : *TargetBB) {
+      PredecessorInsts.insert(&I);
+      if (&I == TargetInst)
+        break;
+    }
+    for (Instruction &I : *TargetBB) {
+      if (&I == TargetInst)
+        break;
+      bool LiveRangeCrossCallsite = false;
+      for (User *U : I.users()) {
+        if (Instruction *Inst = dyn_cast<Instruction>(U)) {
+          if (!PredecessorInsts.count(Inst)) {
+            LiveRangeCrossCallsite = true;
+            break;
+          }
+        }
+      }
+      if (LiveRangeCrossCallsite)
+        NumInterruptedLiveRanges += 1;
+    }
+
+    for (auto &BB : *Caller) {
+      if (DT.dominates(&BB, TargetBB))
+        PreDomBBs.insert(&BB);
+      else if (DT.dominates(TargetBB, &BB))
+        SucDomBBs.insert(&BB);
+    }
+    for (auto BB : PreDomBBs) {
+      for (auto &I : *BB) {
+        for (User *U : I.users()) {
+          if (Instruction *Inst = dyn_cast<Instruction>(U)) {
+            if (SucDomBBs.count(Inst->getParent()))
+              NumInterruptedLiveRanges += 1;
+              break;
+          }
+        }
       }
     }
   }
@@ -2888,8 +2937,7 @@ InlineResult CallAnalyzer::analyze() {
     // Analyze the cost of this block. If we blow through the threshold, this
     // returns false, and we can bail on out.
     InlineResult IR = analyzeBlock(BB, EphValues);
-    // [LittleLaGi] no early return for solitary functions
-    if (!IR.isSuccess() && !F.hasFnAttribute("Solitary"))
+    if (!IR.isSuccess())
       return IR;
 
     Instruction *TI = BB->getTerminator();

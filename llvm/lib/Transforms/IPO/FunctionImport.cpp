@@ -660,7 +660,7 @@ void llvm::ComputeSolitaryFunctions(const ModuleSummaryIndex &Index, FunctionSum
 
   std::list<std::pair<GlobalVariable::GUID, FunctionSummary*>> SummaryList;
   SummaryList.push_back({0, MainFS});
-  const unsigned SolitaryFunctionThreshold = 600;
+  const unsigned SolitaryFunctionThreshold = 700;
   while (!SummaryList.empty()) {
     auto CallerSummaryPair = SummaryList.front();
     auto CallerGUID = CallerSummaryPair.first;
@@ -669,17 +669,27 @@ void llvm::ComputeSolitaryFunctions(const ModuleSummaryIndex &Index, FunctionSum
 
     if (CallerSummary->visited)
         continue;
-    CallerSummary->visited = true;  
+    CallerSummary->visited = true;
+    bool SkipCallee = CallerSummary == MainFS ? false : true;
     if (CallerSummary != MainFS) {
       if (PossibleIndirectCallFuncs.find(CallerGUID) == PossibleIndirectCallFuncs.end()) {
         const unsigned CallSiteCount = CombinedDirectCallSiteCount[CallerGUID];
         const unsigned InstCount = CallerSummary->instCount();
-        if (CallSiteCount == 1 && InstCount != 0 && InstCount <= SolitaryFunctionThreshold) {
+        if (CallSiteCount == 1 && InstCount <= SolitaryFunctionThreshold) {
           CallerSummary->setAlwaysInline();
           Index.MoveOnlyFuncsPtr->insert(CallerGUID);
+          SkipCallee = false;
+          //DEBUG_WITH_TYPE("lagi-inliner", dbgs() << CallerGUID << ": " << InstCount << "\n");
         }
       }
+      else {
+        auto fflag = CallerSummary->fflags();
+        if (fflag.NoInline)
+          SkipCallee = false;
+      }
     }
+    // if (SkipCallee)
+    //   continue;
 
     for (auto &Edge : CallerSummary->calls()) {
       ValueInfo VI = Edge.first;

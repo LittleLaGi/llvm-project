@@ -379,6 +379,11 @@ static void computeFunctionSummary(
             DirectCallSiteCount[GUID] += 1;
           else
             ComdatCalleeRecord[GUID] += 1;
+          for (auto &Arg : CI->args()) {
+            if (auto *C = dyn_cast<ConstantData>(&*Arg)) {
+              
+            }
+          }
         }
           
         // We should have named any anonymous globals
