@@ -91,24 +91,50 @@ class DefaultInlineAdvice : public InlineAdvice {
 public:
   DefaultInlineAdvice(DefaultInlineAdvisor *Advisor, CallBase &CB,
                       Optional<InlineCost> OIC, OptimizationRemarkEmitter &ORE,
-                      raw_string_ostream *RecordStream)
+                      raw_string_ostream *RecordStream,
+                      raw_string_ostream *RecordCallsiteTypeStream)
       : InlineAdvice(Advisor, CB, ORE, OIC.hasValue()), OriginalCB(&CB),
         OIC(OIC), ID{(OriginalCB && hasCallBaseId(*OriginalCB))
                          ? getCallBaseId(*OriginalCB)
                          : -1},
-        RecordStream{RecordStream} {}
+        RecordStream{RecordStream},
+        RecordCallsiteTypeStream{RecordCallsiteTypeStream} {
+          // [LittleLaGi]
+          for (auto &arg : OriginalCB->args()) {
+            callsite_type.append("-");
+            if (auto *constInt = dyn_cast<ConstantInt>(arg))
+              callsite_type.append(std::to_string(constInt->getZExtValue()));
+            else if (auto *constFP = dyn_cast<ConstantFP>(arg)) {
+              SmallVector<char, 10> vec;
+              constFP->getValueAPF().toString(vec);
+              std::string str;
+              for (auto c : vec)
+                str += c;
+              callsite_type.append(str);
+            }
+            else if (dyn_cast<ConstantPointerNull>(arg))
+              callsite_type.append("null");
+            else
+              callsite_type.append("unknown");
+          }
+        }
 
 private:
   void recordUnattemptedInliningImpl() override {
     if (RecordStream)
       *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
                     << ID << ',' << "not_inlined" << '\n';
+    if (RecordCallsiteTypeStream)
+      *RecordCallsiteTypeStream << ID << callsite_type << '\n';
   }
 
   void recordUnsuccessfulInliningImpl(const InlineResult &Result) override {
     if (RecordStream)
       *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
                     << ID << ',' << "not_inlined" << '\n';
+    if (RecordCallsiteTypeStream)
+      *RecordCallsiteTypeStream << ID << callsite_type << '\n';
+    
     using namespace ore;
     llvm::setInlineRemark(*OriginalCB, std::string(Result.getFailureReason()) +
                                            "; " + inlineCostStr(*OIC));
@@ -124,6 +150,8 @@ private:
     if (RecordStream)
       *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
                     << ID << ',' << "inlined" << '\n';
+    if (RecordCallsiteTypeStream)
+      *RecordCallsiteTypeStream << ID << callsite_type << '\n';
     emitInlinedInto(ORE, DLoc, Block, *Callee, *Caller, *OIC);
   }
 
@@ -131,6 +159,8 @@ private:
     if (RecordStream)
       *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
                     << ID << ',' << "inlined" << '\n';
+    if (RecordCallsiteTypeStream)
+      *RecordCallsiteTypeStream << ID << callsite_type << '\n';
     emitInlinedInto(ORE, DLoc, Block, *Callee, *Caller, *OIC);
   }
 
@@ -139,6 +169,8 @@ private:
   Optional<InlineCost> OIC;
   size_t ID;
   raw_string_ostream *RecordStream;
+  raw_string_ostream *RecordCallsiteTypeStream;  // [LittleLaGi]
+  std::string callsite_type;  // [LittleLaGi]
 };
 
 } // namespace
@@ -178,11 +210,16 @@ getDefaultInlineAdvice(CallBase &CB, FunctionAnalysisManager &FAM,
 }
 
 DefaultInlineAdvisor::~DefaultInlineAdvisor() {
-  if (RecordFile.empty())
-    return;
-  std::error_code EC;
-  raw_fd_ostream FStream{RecordFile, EC};
-  FStream << RecordStream.str();
+  if (!RecordFile.empty()) {
+    std::error_code EC;
+    raw_fd_ostream FStream{RecordFile, EC};
+    FStream << RecordStream.str();
+  }
+  if (!RecordCallsiteTypeFile.empty()) {
+    std::error_code EC;
+    raw_fd_ostream FStream{RecordCallsiteTypeFile, EC};
+    FStream << RecordCallsiteTypeStream.str();
+  }
 }
 
 std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
@@ -191,9 +228,10 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
     return std::make_unique<DefaultInlineAdvice>(
         this, CB, ShouldInline,
         FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-        nullptr);
+        nullptr, nullptr);
   }
   auto *RecordStreamPtr = RecordFile.empty() ? nullptr : &RecordStream;
+  auto *RecordCallSiteTypeStreamPtr = RecordCallsiteTypeFile.empty() ? nullptr : &RecordCallsiteTypeStream;
   if (hasCallBaseId(CB)) {
     auto Id = getCallBaseId(CB);
     auto DecisionIt = FixedDecisions.find(Id);
@@ -205,7 +243,7 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
       return std::make_unique<DefaultInlineAdvice>(
           this, CB, ShouldInline,
           FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-          RecordStreamPtr);
+          RecordStreamPtr, RecordCallSiteTypeStreamPtr);
     }
   }
 
@@ -213,7 +251,7 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
   return std::make_unique<DefaultInlineAdvice>(
       this, CB, OIC,
       FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-      RecordStreamPtr);
+      RecordStreamPtr, RecordCallSiteTypeStreamPtr);
 }
 
 void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
