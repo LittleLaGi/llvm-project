@@ -92,13 +92,15 @@ public:
   DefaultInlineAdvice(DefaultInlineAdvisor *Advisor, CallBase &CB,
                       Optional<InlineCost> OIC, OptimizationRemarkEmitter &ORE,
                       raw_string_ostream *RecordStream,
-                      raw_string_ostream *RecordCallsiteTypeStream)
+                      raw_string_ostream *RecordCallsiteTypeStream,
+                      raw_string_ostream *RecordStaticFunctionStream)
       : InlineAdvice(Advisor, CB, ORE, OIC.hasValue()), OriginalCB(&CB),
         OIC(OIC), ID{(OriginalCB && hasCallBaseId(*OriginalCB))
                          ? getCallBaseId(*OriginalCB)
                          : -1},
         RecordStream{RecordStream},
-        RecordCallsiteTypeStream{RecordCallsiteTypeStream} {
+        RecordCallsiteTypeStream{RecordCallsiteTypeStream},
+        RecordStaticFunctionStream{RecordStaticFunctionStream} {
           // [LittleLaGi]
           for (auto &arg : OriginalCB->args()) {
             callsite_type.append("-");
@@ -126,6 +128,9 @@ private:
                     << ID << ',' << "not_inlined" << '\n';
     if (RecordCallsiteTypeStream)
       *RecordCallsiteTypeStream << ID << callsite_type << '\n';
+    if (RecordStaticFunctionStream && Callee->hasLocalLinkage())
+      *RecordStaticFunctionStream << Caller->getName() << ',' << Callee->getName() << ','
+                                  << ID << ',' << "not_inlined" << '\n';
   }
 
   void recordUnsuccessfulInliningImpl(const InlineResult &Result) override {
@@ -134,7 +139,10 @@ private:
                     << ID << ',' << "not_inlined" << '\n';
     if (RecordCallsiteTypeStream)
       *RecordCallsiteTypeStream << ID << callsite_type << '\n';
-    
+    if (RecordStaticFunctionStream && Callee->hasLocalLinkage())
+      *RecordStaticFunctionStream << Caller->getName() << ',' << Callee->getName() << ','
+                                  << ID << ',' << "not_inlined" << '\n';
+
     using namespace ore;
     llvm::setInlineRemark(*OriginalCB, std::string(Result.getFailureReason()) +
                                            "; " + inlineCostStr(*OIC));
@@ -152,6 +160,9 @@ private:
                     << ID << ',' << "inlined" << '\n';
     if (RecordCallsiteTypeStream)
       *RecordCallsiteTypeStream << ID << callsite_type << '\n';
+    if (RecordStaticFunctionStream && Callee->hasLocalLinkage())
+      *RecordStaticFunctionStream << Caller->getName() << ',' << Callee->getName() << ','
+                                  << ID << ',' << "inlined" << '\n';
     emitInlinedInto(ORE, DLoc, Block, *Callee, *Caller, *OIC);
   }
 
@@ -161,6 +172,9 @@ private:
                     << ID << ',' << "inlined" << '\n';
     if (RecordCallsiteTypeStream)
       *RecordCallsiteTypeStream << ID << callsite_type << '\n';
+    if (RecordStaticFunctionStream && Callee->hasLocalLinkage())
+      *RecordStaticFunctionStream << Caller->getName() << ',' << Callee->getName() << ','
+                                  << ID << ',' << "inlined" << '\n';
     emitInlinedInto(ORE, DLoc, Block, *Callee, *Caller, *OIC);
   }
 
@@ -170,6 +184,7 @@ private:
   size_t ID;
   raw_string_ostream *RecordStream;
   raw_string_ostream *RecordCallsiteTypeStream;  // [LittleLaGi]
+  raw_string_ostream *RecordStaticFunctionStream;  // [LittleLaGi]
   std::string callsite_type;  // [LittleLaGi]
 };
 
@@ -220,6 +235,11 @@ DefaultInlineAdvisor::~DefaultInlineAdvisor() {
     raw_fd_ostream FStream{RecordCallsiteTypeFile, EC};
     FStream << RecordCallsiteTypeStream.str();
   }
+  if (!RecordStaticFunctionFile.empty()) {
+    std::error_code EC;
+    raw_fd_ostream FStream{RecordStaticFunctionFile, EC};
+    FStream << RecordStaticFunctionStream.str();
+  }
 }
 
 std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
@@ -228,10 +248,11 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
     return std::make_unique<DefaultInlineAdvice>(
         this, CB, ShouldInline,
         FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-        nullptr, nullptr);
+        nullptr, nullptr, nullptr);
   }
   auto *RecordStreamPtr = RecordFile.empty() ? nullptr : &RecordStream;
   auto *RecordCallSiteTypeStreamPtr = RecordCallsiteTypeFile.empty() ? nullptr : &RecordCallsiteTypeStream;
+  auto *RecordStaticFunctionStreamPtr = RecordStaticFunctionFile.empty() ? nullptr : &RecordStaticFunctionStream;
   if (hasCallBaseId(CB)) {
     auto Id = getCallBaseId(CB);
     auto DecisionIt = FixedDecisions.find(Id);
@@ -243,7 +264,7 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
       return std::make_unique<DefaultInlineAdvice>(
           this, CB, ShouldInline,
           FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-          RecordStreamPtr, RecordCallSiteTypeStreamPtr);
+          RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr);
     }
   }
 
@@ -251,7 +272,7 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
   return std::make_unique<DefaultInlineAdvice>(
       this, CB, OIC,
       FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-      RecordStreamPtr, RecordCallSiteTypeStreamPtr);
+      RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr);
 }
 
 void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
@@ -260,7 +281,11 @@ void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
     SmallVector<StringRef, 4> LineParts;
     StringRef{Line}.split(LineParts, ',');
     assert(LineParts.size() == 4);
-    FixedDecisions[std::stoi(LineParts[2].str())] = LineParts[3] == "inlined";
+    //FixedDecisions[std::stoi(LineParts[2].str())] = LineParts[3] == "inlined";
+    std::istringstream iss(LineParts[2].str());
+    size_t ID;
+    iss >> ID;
+    FixedDecisions[ID] = LineParts[3] == "inlined";
   }
 }
 

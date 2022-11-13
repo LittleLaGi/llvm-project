@@ -174,11 +174,14 @@ private:
 class DefaultInlineAdvisor : public InlineAdvisor {
 public:
   DefaultInlineAdvisor(FunctionAnalysisManager &FAM, InlineParams Params)
-      : InlineAdvisor(FAM), Params(Params), RecordStream{RecordString}, RecordCallsiteTypeStream{RecordCallsiteTypeString} {
+      : InlineAdvisor(FAM), Params(Params), RecordStream{RecordString}, RecordCallsiteTypeStream{RecordCallsiteTypeString}
+                                                                      , RecordStaticFunctionStream{RecordStaticFunctionString} {
     if (const char *RecordFileName = std::getenv("RECORD_INLINE"))
       RecordFile = RecordFileName;
     if (const char *RecordCallsiteTypeFileName = std::getenv("RECORD_CALLSITE_TYPE"))
       RecordCallsiteTypeFile = RecordCallsiteTypeFileName;
+    if (const char *RecordStaticFunctionFileName = std::getenv("RECORD_STATIC_FUNCTIONS"))
+      RecordStaticFunctionFile = RecordStaticFunctionFileName;
     if (const char *FixedDecisionsFileName = std::getenv("FIXED_INLINE_RECORD"))
       loadFixedDecisions(FixedDecisionsFileName);
   }
@@ -199,6 +202,9 @@ private:
   std::string RecordCallsiteTypeFile;  // [LittleLaGi]
   std::string RecordCallsiteTypeString;  // [LittleLaGi]
   raw_string_ostream RecordCallsiteTypeStream;  // [LittleLaGi]
+  std::string RecordStaticFunctionFile;  // [LittleLaGi]
+  std::string RecordStaticFunctionString;  // [LittleLaGi]
+  raw_string_ostream RecordStaticFunctionStream;  // [LittleLaGi]
   std::unordered_map<size_t, bool> FixedDecisions;
 };
 
