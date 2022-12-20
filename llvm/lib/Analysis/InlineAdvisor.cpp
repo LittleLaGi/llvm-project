@@ -276,6 +276,9 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
 }
 
 void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
+  bool NoOverwrite = false;
+  if (const char *OverwriteFlag = std::getenv("NO_OVERWRITE"))
+    NoOverwrite = true;
   std::ifstream IStream{FName};
   for (std::string Line; std::getline(IStream, Line);) {
     SmallVector<StringRef, 4> LineParts;
@@ -285,6 +288,10 @@ void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
     std::istringstream iss(LineParts[2].str());
     size_t ID;
     iss >> ID;
+    if (NoOverwrite && (FixedDecisions.find(ID) != FixedDecisions.end())) {
+      if (FixedDecisions[ID])
+        continue;
+    }
     FixedDecisions[ID] = LineParts[3] == "inlined";
   }
 }

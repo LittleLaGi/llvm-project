@@ -96,6 +96,7 @@ MODULE_PASS("kasan-module", ModuleAddressSanitizerPass(/*CompileKernel=*/true, f
 MODULE_PASS("sancov-module", ModuleSanitizerCoveragePass())
 MODULE_PASS("poison-checking", PoisonCheckingPass())
 MODULE_PASS("function-id", FunctionIDPass())
+MODULE_PASS("local-function-info", LocalFunctionInfoPass())
 #undef MODULE_PASS
 
 #ifndef CGSCC_ANALYSIS
