@@ -97,6 +97,10 @@ MODULE_PASS("sancov-module", ModuleSanitizerCoveragePass())
 MODULE_PASS("poison-checking", PoisonCheckingPass())
 MODULE_PASS("function-id", FunctionIDPass())
 MODULE_PASS("local-function-info", LocalFunctionInfoPass())
+MODULE_PASS("callsite-exploring", CallsiteExploringPass())
+MODULE_PASS("verify-inline-decisions", VerifyInlineDecisionsPass())
+MODULE_PASS("callsite-id-rewriting", CallsiteIDRewritingPass())
+MODULE_PASS("siblings-exploring", SiblingsExploringPass())
 #undef MODULE_PASS
 
 #ifndef CGSCC_ANALYSIS

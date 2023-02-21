@@ -75,6 +75,8 @@ struct ClonedCodeInfo {
   /// originally inserted callsites were DCE'ed after they were cloned.
   std::vector<WeakTrackingVH> OperandBundleCallSites;
 
+  // std::string InlinedCallsiteID;
+
   ClonedCodeInfo() = default;
 };
 

@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <map>
+#include <set>
 
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/IR/PassManager.h"
@@ -168,6 +170,13 @@ private:
   std::unordered_set<const Function *> DeletedFunctions;
 };
 
+enum InlineDecision {
+  undecided,
+  not_inlined,
+  inlined,
+  illegal
+};
+
 /// The default (manual heuristics) implementation of the InlineAdvisor. This
 /// implementation does not need to keep state between inliner pass runs, and is
 /// reusable as-is for inliner pass test scenarios, as well as for regular use.
@@ -182,16 +191,28 @@ public:
       RecordCallsiteTypeFile = RecordCallsiteTypeFileName;
     if (const char *RecordStaticFunctionFileName = std::getenv("RECORD_STATIC_FUNCTIONS"))
       RecordStaticFunctionFile = RecordStaticFunctionFileName;
-    if (const char *FixedDecisionsFileName = std::getenv("FIXED_INLINE_RECORD"))
+    if (std::getenv("UPDATE_DECISIONS"))
+      UpdateDecisionsMode = true;    
+    if (FixedDecisionsFileName = std::getenv("FIXED_INLINE_RECORD"))
       loadFixedDecisions(FixedDecisionsFileName);
+    if (const char *TargetCallsiteIDStr = std::getenv("INCREMENTAL_MODE"))
+      IncrementalMode = true;
+    if (std::getenv("INLINE_RESULT"))
+      IsCallerAvailableExternally = true;
+    if (LiveFunctionsFileName = std::getenv("LIVE_FUNCS_RECORD")) {
+      loadLiveFunctions(LiveFunctionsFileName);
+      PreprocessMode = true;
+    }
   }
 
-  virtual ~DefaultInlineAdvisor();
+  ~DefaultInlineAdvisor();
 
 private:
   std::unique_ptr<InlineAdvice> getAdvice(CallBase &CB) override;
 
   void loadFixedDecisions(const char *FName);
+
+  void loadLiveFunctions(const char *FName);
 
   void onPassExit() override { freeDeletedFunctions(); }
 
@@ -205,7 +226,18 @@ private:
   std::string RecordStaticFunctionFile;  // [LittleLaGi]
   std::string RecordStaticFunctionString;  // [LittleLaGi]
   raw_string_ostream RecordStaticFunctionStream;  // [LittleLaGi]
-  std::unordered_map<size_t, bool> FixedDecisions;
+  char *FixedDecisionsFileName;
+  const std::vector<std::string> InlineDecisionStr = {"undecided", "not_inlined", "inlined", "illegal"};
+  std::map<size_t, InlineDecision> FixedDecisions;
+  std::unordered_map<size_t, std::pair<std::string, std::string>> ID2CallerAndCallee;
+  std::set<std::string> InlinedCallers;
+  size_t MaxCallBaseID = 0;
+  bool IncrementalMode = false;
+  bool UpdateDecisionsMode = false;
+  bool IsCallerAvailableExternally = false;
+  char *LiveFunctionsFileName;
+  std::set<std::string> LiveFunctions;
+  bool PreprocessMode = false;
 };
 
 /// The InlineAdvisorAnalysis is a module pass because the InlineAdvisor

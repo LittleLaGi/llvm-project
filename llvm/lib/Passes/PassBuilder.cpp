@@ -106,6 +106,12 @@
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/BoundsChecking.h"
+#include "llvm/Transforms/Instrumentation/CallsiteExploring.h"
+#include "llvm/Transforms/Instrumentation/SiblingsExploring.h"
+#include "llvm/Transforms/Instrumentation/VerifyInlineDecisions.h"
+#include "llvm/Transforms/Instrumentation/DecisionGroupExploring.h"
+#include "llvm/Transforms/Instrumentation/CallsiteIDRewriting.h"
+#include "llvm/Transforms/Instrumentation/LiveFunctionExploring.h"
 #include "llvm/Transforms/Instrumentation/CGProfile.h"
 #include "llvm/Transforms/Instrumentation/ControlHeightReduction.h"
 #include "llvm/Transforms/Instrumentation/GCOVProfiler.h"
@@ -195,6 +201,7 @@
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
+#include <cstdlib>
 
 using namespace llvm;
 
@@ -848,6 +855,9 @@ PassBuilder::buildInlinerPipeline(OptimizationLevel Level, ThinLTOPhase Phase,
 
   ModuleInlinerWrapperPass MIWP(IP, DebugLogging, UseInlineAdvisor,
                                 MaxDevirtIterations);
+  
+  if (std::getenv("INLINER_PHASE") && std::string(std::getenv("INLINER_PHASE")) == "INLINE")
+    return MIWP;
 
   // Require the GlobalsAA analysis for the module so we can query it within
   // the CGSCC pipeline.
@@ -1027,6 +1037,9 @@ ModulePassManager PassBuilder::buildModuleSimplificationPipeline(
   // Synthesize function entry counts for non-PGO compilation.
   if (EnableSyntheticCounts && !PGOOpt)
     MPM.addPass(SyntheticCountsPropagation());
+
+  if (std::getenv("INLINER_PHASE") && std::string(std::getenv("INLINER_PHASE")) == "PRE_TUNE") 
+    return MPM;
 
   MPM.addPass(buildInlinerPipeline(Level, Phase, DebugLogging));
   return MPM;
@@ -1244,13 +1257,39 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
   if (PGOOpt && PGOOpt->SamplePGOSupport)
     MPM.addPass(createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
 
+  if (const char *phase = std::getenv("INLINER_PHASE")) {
+    std::string inline_phase = phase;
+    if (inline_phase == "PRE_TUNE") {
+    MPM.addPass(buildModuleSimplificationPipeline(Level, ThinLTOPhase::None,
+                                                DebugLogging));
+      // MPM.addPass(buildInlinerPipeline(Level, ThinLTOPhase::None, DebugLogging));
+      return MPM;
+    }
+    if (inline_phase == "INLINE") {
+      MPM.addPass(buildInlinerPipeline(Level, ThinLTOPhase::None, DebugLogging));
+      return MPM;
+    }
+    if (inline_phase == "POST_TUNE") {
+      MPM.addPass(buildInlinerPipeline(Level, ThinLTOPhase::None, DebugLogging));
+      MPM.addPass(CallsiteExploringPass());
+      MPM.addPass(SiblingsExploringPass());
+      MPM.addPass(DecisionGroupExploringPass());
+      MPM.addPass(buildModuleOptimizationPipeline(Level, DebugLogging, LTOPreLink));
+      MPM.addPass(LiveFunctionExploringPass());
+      return MPM;
+    }
+  }
+
   // Add the core simplification pipeline.
   MPM.addPass(buildModuleSimplificationPipeline(Level, ThinLTOPhase::None,
                                                 DebugLogging));
+  MPM.addPass(CallsiteExploringPass());
+  MPM.addPass(SiblingsExploringPass());
+  MPM.addPass(DecisionGroupExploringPass());
 
   // Now add the optimization pipeline.
   MPM.addPass(buildModuleOptimizationPipeline(Level, DebugLogging, LTOPreLink));
-
+  MPM.addPass(LiveFunctionExploringPass());
   return MPM;
 }
 

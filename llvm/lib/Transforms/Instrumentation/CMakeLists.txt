@@ -1,11 +1,15 @@
 add_llvm_component_library(LLVMInstrumentation
   AddressSanitizer.cpp
   BoundsChecking.cpp
+  CallsiteExploring.cpp
+  CallsiteIDRewriting.cpp
   CGProfile.cpp
   ControlHeightReduction.cpp
   DataFlowSanitizer.cpp
+  DecisionGroupExploring.cpp
   FunctionID.cpp
   GCOVProfiling.cpp
+  LiveFunctionExploring.cpp
   MemorySanitizer.cpp
   IndirectCallPromotion.cpp
   Instrumentation.cpp
@@ -15,7 +19,9 @@ add_llvm_component_library(LLVMInstrumentation
   PGOMemOPSizeOpt.cpp
   PoisonChecking.cpp
   SanitizerCoverage.cpp
+  SiblingsExploring.cpp
   ValueProfileCollector.cpp
+  VerifyInlineDecisions.cpp
   ThreadSanitizer.cpp
   HWAddressSanitizer.cpp
 

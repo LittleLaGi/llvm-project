@@ -1823,6 +1823,8 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
     // have no dead or constant instructions leftover after inlining occurs
     // (which can happen, e.g., because an argument was constant), but we'll be
     // happy with whatever the cloner can do.
+    // if (auto *N = CB.getMetadata("callbase.id"))
+    //   InlinedFunctionInfo.InlinedCallsiteID = std::string(cast<MDString>(N->getOperand(0))->getString());
     CloneAndPruneFunctionInto(Caller, CalledFunc, VMap,
                               /*ModuleLevelChanges=*/false, Returns, ".i",
                               &InlinedFunctionInfo, &CB);

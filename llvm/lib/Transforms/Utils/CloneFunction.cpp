@@ -374,6 +374,18 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
       else
         hasDynamicAllocas = true;
     }
+
+    // remove ID
+    // loop unswitch also call this function, but InlinedCallsiteID will be empty
+    // if (!CodeInfo->InlinedCallsiteID.empty()) {
+    //   if (auto *CB = dyn_cast<CallBase>(NewInst)) {
+    //     if(auto *N = CB->getMetadata("callbase.id")) {
+    //       std::string ID = std::string(cast<MDString>(N->getOperand(0))->getString());
+    //       auto &Ctx = BB->getParent()->getParent()->getContext();
+    //       CB->setMetadata("callbase.id", MDNode::get(Ctx,MDString::get(Ctx, CodeInfo->InlinedCallsiteID + "-" + ID)));
+    //     } 
+    //   }
+    // }
   }
 
   // Finally, clone over the terminator.

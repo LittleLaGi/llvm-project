@@ -22,6 +22,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/IR/CFG.h"
 
 #include <fstream>
 #include <sstream>
@@ -58,6 +59,13 @@ static cl::opt<int>
                         cl::desc("Scale to limit the cost of inline deferral"),
                         cl::init(2), cl::Hidden);
 
+// namespace {
+// __attribute__((noinline)) std::string getCallBaseId(const CallBase &CB) {
+//   auto *N = CB.getMetadata("callbase.id");
+//   assert(N && "CallBase does not carry metadata.\n");
+//   return cast<MDString>(N->getOperand(0))->getString().str();
+// }
+
 namespace {
 __attribute__((noinline)) size_t getCallBaseId(const CallBase &CB) {
   auto *N = CB.getMetadata("callbase.id");
@@ -77,13 +85,13 @@ bool hasCallBaseId(const CallBase &CB) {
 
   if (not dyn_cast<MDNode>(N)->getOperand(0))
     return false;
-
+  //
   auto *CM = dyn_cast<ConstantAsMetadata>(dyn_cast<MDNode>(N)->getOperand(0));
   if (not CM)
     return false;
   if (not CM->getValue())
     return false;
-
+  //
   return true;
 }
 
@@ -93,14 +101,16 @@ public:
                       Optional<InlineCost> OIC, OptimizationRemarkEmitter &ORE,
                       raw_string_ostream *RecordStream,
                       raw_string_ostream *RecordCallsiteTypeStream,
-                      raw_string_ostream *RecordStaticFunctionStream)
+                      raw_string_ostream *RecordStaticFunctionStream,
+                      std::map<size_t, InlineDecision> &FixedDecisions)
       : InlineAdvice(Advisor, CB, ORE, OIC.hasValue()), OriginalCB(&CB),
         OIC(OIC), ID{(OriginalCB && hasCallBaseId(*OriginalCB))
                          ? getCallBaseId(*OriginalCB)
                          : -1},
         RecordStream{RecordStream},
         RecordCallsiteTypeStream{RecordCallsiteTypeStream},
-        RecordStaticFunctionStream{RecordStaticFunctionStream} {
+        RecordStaticFunctionStream{RecordStaticFunctionStream},
+        FixedDecisions(FixedDecisions) {
           // [LittleLaGi]
           for (auto &arg : OriginalCB->args()) {
             callsite_type.append("-");
@@ -142,7 +152,8 @@ private:
     if (RecordStaticFunctionStream && Callee->hasLocalLinkage())
       *RecordStaticFunctionStream << Caller->getName() << ',' << Callee->getName() << ','
                                   << ID << ',' << "not_inlined" << '\n';
-
+    //FixedDecisions[ID] = InlineDecision::illegal;
+    //setenv("ILLEGAL_DECISION", "TRUE", true);
     using namespace ore;
     llvm::setInlineRemark(*OriginalCB, std::string(Result.getFailureReason()) +
                                            "; " + inlineCostStr(*OIC));
@@ -176,6 +187,14 @@ private:
       *RecordStaticFunctionStream << Caller->getName() << ',' << Callee->getName() << ','
                                   << ID << ',' << "inlined" << '\n';
     emitInlinedInto(ORE, DLoc, Block, *Callee, *Caller, *OIC);
+
+    // char *TargetCallsiteID = std::getenv("CALLSITE_ID");
+    // if (TargetCallsiteID && (std::string(TargetCallsiteID) == std::string(ID))) {
+    //   std::ofstream ResultFile;
+    //   ResultFile.open(std::getenv("INLINE_RESULT"));
+    //   ResultFile << "inlined";
+    //   ResultFile.close();
+    // }
   }
 
 private:
@@ -186,6 +205,7 @@ private:
   raw_string_ostream *RecordCallsiteTypeStream;  // [LittleLaGi]
   raw_string_ostream *RecordStaticFunctionStream;  // [LittleLaGi]
   std::string callsite_type;  // [LittleLaGi]
+  std::map<size_t, InlineDecision> &FixedDecisions;
 };
 
 } // namespace
@@ -240,6 +260,16 @@ DefaultInlineAdvisor::~DefaultInlineAdvisor() {
     raw_fd_ostream FStream{RecordStaticFunctionFile, EC};
     FStream << RecordStaticFunctionStream.str();
   }
+  if (UpdateDecisionsMode && FixedDecisionsFileName) {
+    std::error_code EC;
+    raw_fd_ostream FStream{FixedDecisionsFileName, EC};
+    for (auto &pair : FixedDecisions) {
+      auto ID = pair.first;
+      auto Caller = ID2CallerAndCallee[ID].first;
+      auto Callee = ID2CallerAndCallee[ID].second;
+      FStream << Caller << "," << Callee << "," << ID << "," << InlineDecisionStr[pair.second] << "\n";
+    }
+  }
 }
 
 std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
@@ -248,31 +278,111 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
     return std::make_unique<DefaultInlineAdvice>(
         this, CB, ShouldInline,
         FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-        nullptr, nullptr, nullptr);
+        nullptr, nullptr, nullptr, FixedDecisions);
   }
   auto *RecordStreamPtr = RecordFile.empty() ? nullptr : &RecordStream;
   auto *RecordCallSiteTypeStreamPtr = RecordCallsiteTypeFile.empty() ? nullptr : &RecordCallsiteTypeStream;
   auto *RecordStaticFunctionStreamPtr = RecordStaticFunctionFile.empty() ? nullptr : &RecordStaticFunctionStream;
-  if (hasCallBaseId(CB)) {
-    auto Id = getCallBaseId(CB);
-    auto DecisionIt = FixedDecisions.find(Id);
-    if (DecisionIt != FixedDecisions.end()) {
-      Optional<InlineCost> ShouldInline;
-      if (DecisionIt->second)
-        ShouldInline = InlineCost::getAlways("Forced");
+  Function *Callee = CB.getCalledFunction();
+  if (IncrementalMode && hasCallBaseId(CB) && Callee && !Callee->isDeclaration()) {
+    auto ID = getCallBaseId(CB);
 
+    // char *TargetCallsiteID = std::getenv("CALLSITE_ID");
+    // if (TargetCallsiteID && (std::string(TargetCallsiteID) == std::string(ID))) {
+    //   //setenv("INLINE_RESULT", "Y", true);
+    //   auto OIC = getDefaultInlineAdvice(CB, FAM, Params);
+    //   return std::make_unique<DefaultInlineAdvice>(
+    //       this, CB, OIC,
+    //       FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
+    //       RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr, FixedDecisions);
+    // }
+
+    // if (ID[0] == '-') {
+    //   std::string CallerGUIDstr = std::to_string(CB.getCaller()->getGUID());
+    //   std::string NewID = CallerGUIDstr + ID;
+    //   Module *M = CB.getCaller()->getParent();
+    //   auto &Ctx = M->getContext();
+    //   auto *N = MDNode::get(Ctx, MDString::get(Ctx, NewID));
+    //   CB.setMetadata("callbase.id", N);
+    //   ID = NewID;
+    // }
+    auto DecisionIt = FixedDecisions.find(ID);
+    if (DecisionIt != FixedDecisions.end()) {
+      // InlinedCallers.insert(std::string(CB.getCaller()->getName()));
+
+      // if (UpdateDecisionsMode) {
+      //   const int MaxMarkCount = 10;
+      //   int MarkCount = 0;
+      //   auto markAsUndecided = [&](const BasicBlock *BB) {
+      //     for (auto &I : *BB) {
+      //       if (auto *CB = dyn_cast<CallBase>(&I)) {
+      //         if (MarkCount == MaxMarkCount)
+      //           break;
+      //         if (hasCallBaseId(*CB)) {
+      //           std::string ID = getCallBaseId(*CB);
+      //           if (FixedDecisions[ID] == InlineDecision::not_inlined) {
+      //             FixedDecisions[ID] = InlineDecision::undecided;
+      //             MarkCount += 1;
+      //           }
+      //         }
+      //       }
+      //     }
+      //   };
+      //   const BasicBlock *CurrBB = CB.getParent();
+      //   markAsUndecided(CurrBB);
+      //   for (const BasicBlock *Succ : successors(CurrBB))
+      //     markAsUndecided(Succ);
+      //   for (const BasicBlock *Pre : predecessors(CurrBB))
+      //     markAsUndecided(Pre);
+      // }
+
+      Optional<InlineCost> ShouldInline;
+      if (FixedDecisions[ID] == InlineDecision::inlined)
+        ShouldInline = InlineCost::getAlways("Forced");
       return std::make_unique<DefaultInlineAdvice>(
           this, CB, ShouldInline,
           FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-          RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr);
+          RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr, FixedDecisions);
+    }
+    else if (DecisionIt == FixedDecisions.end() && UpdateDecisionsMode) {
+      FixedDecisions[ID] = InlineDecision::undecided;
+      ID2CallerAndCallee[ID] = std::make_pair(std::string(CB.getCaller()->getName()), std::string(Callee->getName()));
+    }
+    Optional<InlineCost> ShouldInline;
+    return std::make_unique<DefaultInlineAdvice>(
+        this, CB, ShouldInline,
+        FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
+        RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr, FixedDecisions);
+  }
+  else if (PreprocessMode && hasCallBaseId(CB)) {
+    std::string Caller = std::string(CB.getCaller()->getName());
+    if (LiveFunctions.count(Caller)) {
+      // do not inline tunable callsites
+      Optional<InlineCost> ShouldInline;
+      return std::make_unique<DefaultInlineAdvice>(
+          this, CB, ShouldInline,
+          FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
+          RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr, FixedDecisions);
     }
   }
-
+  else if (hasCallBaseId(CB)) {
+    auto Id = getCallBaseId(CB);
+    auto DecisionIt = FixedDecisions.find(Id);
+    if (DecisionIt != FixedDecisions.end() && FixedDecisions[Id] == InlineDecision::inlined) {
+      Optional<InlineCost> ShouldInline;
+      if (DecisionIt->second)
+        ShouldInline = InlineCost::getAlways("Forced");
+      return std::make_unique<DefaultInlineAdvice>(
+          this, CB, ShouldInline,
+          FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
+          RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr, FixedDecisions);
+    }
+  }
   auto OIC = getDefaultInlineAdvice(CB, FAM, Params);
   return std::make_unique<DefaultInlineAdvice>(
       this, CB, OIC,
       FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-      RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr);
+      RecordStreamPtr, RecordCallSiteTypeStreamPtr, RecordStaticFunctionStreamPtr, FixedDecisions);
 }
 
 void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
@@ -284,16 +394,32 @@ void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
     SmallVector<StringRef, 4> LineParts;
     StringRef{Line}.split(LineParts, ',');
     assert(LineParts.size() == 4);
-    //FixedDecisions[std::stoi(LineParts[2].str())] = LineParts[3] == "inlined";
     std::istringstream iss(LineParts[2].str());
     size_t ID;
     iss >> ID;
     if (NoOverwrite && (FixedDecisions.find(ID) != FixedDecisions.end())) {
-      if (FixedDecisions[ID])
+      if (FixedDecisions[ID] == InlineDecision::inlined)
         continue;
     }
-    FixedDecisions[ID] = LineParts[3] == "inlined";
+    if (LineParts[3] == "undecided")
+      FixedDecisions[ID] = InlineDecision::undecided;
+    else if (LineParts[3] == "not_inlined")
+      FixedDecisions[ID] = InlineDecision::not_inlined;
+    else if (LineParts[3] == "inlined")
+      FixedDecisions[ID] = InlineDecision::inlined;
+    else if (LineParts[3] == "illegal")
+      FixedDecisions[ID] = InlineDecision::illegal;
+    else
+      assert(false && "unknown inline decision");
+    if (UpdateDecisionsMode)
+      ID2CallerAndCallee[ID] = std::make_pair(std::string(LineParts[0]), std::string(LineParts[1]));
   }
+}
+
+void DefaultInlineAdvisor::loadLiveFunctions(const char *FName) {
+  std::ifstream IStream{FName};
+  for (std::string Line; std::getline(IStream, Line);)
+    LiveFunctions.insert(Line);
 }
 
 InlineAdvice::InlineAdvice(InlineAdvisor *Advisor, CallBase &CB,
