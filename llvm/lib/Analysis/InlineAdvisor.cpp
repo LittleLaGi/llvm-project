@@ -276,9 +276,15 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
 }
 
 void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
-  bool NoOverwrite = false;
-  if (const char *OverwriteFlag = std::getenv("NO_OVERWRITE"))
-    NoOverwrite = true;
+  enum OverwriteModeType {none, no_overwrite_inline, no_overwrite_not_inline};
+  OverwriteModeType OverwriteMode = OverwriteModeType::none;
+  if (const char *OverwriteFlag = std::getenv("NO_OVERWRITE")) {
+    std::string Mode = OverwriteFlag;
+    if (Mode == "no_overwrite_inline")
+      OverwriteMode = OverwriteModeType::no_overwrite_inline;
+    else if (Mode == "no_overwrite_not_inline")
+      OverwriteMode = OverwriteModeType::no_overwrite_not_inline;
+  }
   std::ifstream IStream{FName};
   for (std::string Line; std::getline(IStream, Line);) {
     SmallVector<StringRef, 4> LineParts;
@@ -288,8 +294,10 @@ void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
     std::istringstream iss(LineParts[2].str());
     size_t ID;
     iss >> ID;
-    if (NoOverwrite && (FixedDecisions.find(ID) != FixedDecisions.end())) {
-      if (FixedDecisions[ID])
+    if (FixedDecisions.find(ID) != FixedDecisions.end()) {
+      if (OverwriteMode == OverwriteModeType::no_overwrite_inline && FixedDecisions[ID])
+        continue;
+      else if (OverwriteMode == OverwriteModeType::no_overwrite_not_inline && !FixedDecisions[ID])
         continue;
     }
     FixedDecisions[ID] = LineParts[3] == "inlined";
