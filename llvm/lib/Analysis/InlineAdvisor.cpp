@@ -253,7 +253,7 @@ std::unique_ptr<InlineAdvice> DefaultInlineAdvisor::getAdvice(CallBase &CB) {
   auto *RecordStreamPtr = RecordFile.empty() ? nullptr : &RecordStream;
   auto *RecordCallSiteTypeStreamPtr = RecordCallsiteTypeFile.empty() ? nullptr : &RecordCallsiteTypeStream;
   auto *RecordStaticFunctionStreamPtr = RecordStaticFunctionFile.empty() ? nullptr : &RecordStaticFunctionStream;
-  if (hasCallBaseId(CB)) {
+  if (hasCallBaseId(CB)) { //  && !CB.getCaller()->hasAvailableExternallyLinkage()
     auto Id = getCallBaseId(CB);
     auto DecisionIt = FixedDecisions.find(Id);
     if (DecisionIt != FixedDecisions.end()) {

@@ -43,6 +43,7 @@ MODULE_ALIAS_ANALYSIS("globals-aa", GlobalsAA())
 MODULE_PASS("always-inline", AlwaysInlinerPass())
 MODULE_PASS("attributor", AttributorPass())
 MODULE_PASS("called-value-propagation", CalledValuePropagationPass())
+MODULE_PASS("callsite-info", CallsiteInfoPass())
 MODULE_PASS("canonicalize-aliases", CanonicalizeAliasesPass())
 MODULE_PASS("cg-profile", CGProfilePass())
 MODULE_PASS("constmerge", ConstantMergePass())
@@ -97,6 +98,7 @@ MODULE_PASS("sancov-module", ModuleSanitizerCoveragePass())
 MODULE_PASS("poison-checking", PoisonCheckingPass())
 MODULE_PASS("function-id", FunctionIDPass())
 MODULE_PASS("local-function-info", LocalFunctionInfoPass())
+MODULE_PASS("record-available-externally-functions", RecordAvailableExternallyFuncitonPass())
 #undef MODULE_PASS
 
 #ifndef CGSCC_ANALYSIS

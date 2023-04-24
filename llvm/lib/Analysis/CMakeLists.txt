@@ -51,6 +51,7 @@ add_llvm_component_library(LLVMAnalysis
   CallGraph.cpp
   CallGraphSCCPass.cpp
   CallPrinter.cpp
+  CallsiteInfo.cpp
   CaptureTracking.cpp
   CmpInstAnalysis.cpp
   CostModel.cpp
@@ -66,6 +67,7 @@ add_llvm_component_library(LLVMAnalysis
   DomTreeUpdater.cpp
   DominanceFrontier.cpp
   EHPersonalities.cpp
+  GeneralFunctionInfo.cpp
   GlobalsModRef.cpp
   GuardUtils.cpp
   HeatUtils.cpp
@@ -117,6 +119,7 @@ add_llvm_component_library(LLVMAnalysis
   PostDominators.cpp
   ProfileSummaryInfo.cpp
   PtrUseVisitor.cpp
+  RecordAvailableExternallyFunciton.cpp
   RegionInfo.cpp
   RegionPass.cpp
   RegionPrinter.cpp

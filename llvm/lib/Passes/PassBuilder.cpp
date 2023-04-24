@@ -22,6 +22,7 @@
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
+#include "llvm/Analysis/CallsiteInfo.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/Analysis/CFLAndersAliasAnalysis.h"
 #include "llvm/Analysis/CFLSteensAliasAnalysis.h"
@@ -31,6 +32,7 @@
 #include "llvm/Analysis/DemandedBits.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/DominanceFrontier.h"
+#include "llvm/Analysis/GeneralFunctionInfo.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/IVUsers.h"
 #include "llvm/Analysis/InlineAdvisor.h"
@@ -50,6 +52,7 @@
 #include "llvm/Analysis/PhiValues.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
+#include "llvm/Analysis/RecordAvailableExternallyFunciton.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
@@ -195,6 +198,7 @@
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
+#include <cstdlib>
 
 using namespace llvm;
 
@@ -848,6 +852,9 @@ PassBuilder::buildInlinerPipeline(OptimizationLevel Level, ThinLTOPhase Phase,
 
   ModuleInlinerWrapperPass MIWP(IP, DebugLogging, UseInlineAdvisor,
                                 MaxDevirtIterations);
+  
+  if (std::getenv("RECORD_LOCAL_FUNCTIONS"))
+    return MIWP;
 
   // Require the GlobalsAA analysis for the module so we can query it within
   // the CGSCC pipeline.
@@ -1028,7 +1035,20 @@ ModulePassManager PassBuilder::buildModuleSimplificationPipeline(
   if (EnableSyntheticCounts && !PGOOpt)
     MPM.addPass(SyntheticCountsPropagation());
 
+  if (std::getenv("RECORD_GENERAL_FUNCTIONS")) {
+    MPM.addPass(GeneralFunctionInfoPass());
+    return MPM;
+  }
+  if (std::getenv("RECORD_CALLSITE_INFO")) {
+    MPM.addPass(CallsiteInfoPass());
+    return MPM;
+  }
+
   MPM.addPass(buildInlinerPipeline(Level, Phase, DebugLogging));
+
+  if (std::getenv("RECORD_LOCAL_FUNCTIONS"))
+    MPM.addPass(LocalFunctionInfoPass());
+  
   return MPM;
 }
 
