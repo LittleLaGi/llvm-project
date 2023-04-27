@@ -852,9 +852,6 @@ PassBuilder::buildInlinerPipeline(OptimizationLevel Level, ThinLTOPhase Phase,
 
   ModuleInlinerWrapperPass MIWP(IP, DebugLogging, UseInlineAdvisor,
                                 MaxDevirtIterations);
-  
-  if (std::getenv("RECORD_LOCAL_FUNCTIONS"))
-    return MIWP;
 
   // Require the GlobalsAA analysis for the module so we can query it within
   // the CGSCC pipeline.
@@ -1044,11 +1041,11 @@ ModulePassManager PassBuilder::buildModuleSimplificationPipeline(
     return MPM;
   }
 
-  MPM.addPass(buildInlinerPipeline(Level, Phase, DebugLogging));
-
   if (std::getenv("RECORD_LOCAL_FUNCTIONS"))
     MPM.addPass(LocalFunctionInfoPass());
   
+  MPM.addPass(buildInlinerPipeline(Level, Phase, DebugLogging));
+
   return MPM;
 }
 
