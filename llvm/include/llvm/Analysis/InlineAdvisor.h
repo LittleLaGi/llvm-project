@@ -18,6 +18,7 @@
 #include <memory>
 #include <sstream>
 #include <system_error>
+#include <unordered_map>
 
 namespace llvm {
 class BasicBlock;
@@ -191,6 +192,7 @@ private:
   void recordUnsuccessfulInliningImpl(const InlineResult &Result) override;
   void recordInliningWithCalleeDeletedImpl() override;
   void recordInliningImpl() override;
+  void recordUnattemptedInliningImpl() override;
 
 private:
   CallBase *const OriginalCB;
@@ -274,17 +276,22 @@ public:
       : InlineAdvisor(M, FAM, IC), Params(Params), RecordStream{RecordString} {
     if (const char *RecordFileName = std::getenv("RECORD_INLINE"))
       RecordFile = RecordFileName;
+    if (const char *FixedDecisionsFileName = std::getenv("FIXED_INLINE_RECORD"))
+      loadFixedDecisions(FixedDecisionsFileName);
   }
 
   ~DefaultInlineAdvisor() override;
 
 private:
   std::unique_ptr<InlineAdvice> getAdviceImpl(CallBase &CB) override;
+  
+  void loadFixedDecisions(const char *FName);
 
   InlineParams Params;
   std::string RecordFile;
   std::string RecordString;
   raw_string_ostream RecordStream;
+  std::unordered_map<size_t, bool> FixedDecisions;
 };
 
 /// Used for dynamically registering InlineAdvisors as plugins

@@ -26,6 +26,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
+#include <fstream>
 
 using namespace llvm;
 #define DEBUG_TYPE "inline"
@@ -140,6 +141,12 @@ void DefaultInlineAdvice::recordInliningImpl() {
                                Advisor->getAnnotatedInlinePassName());
 }
 
+void DefaultInlineAdvice::recordUnattemptedInliningImpl() {
+  if (RecordStream)
+    *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
+                  << ID << ',' << "not_inlined" << '\n';
+}
+
 DefaultInlineAdvisor::~DefaultInlineAdvisor() {
   if (RecordFile.empty())
     return;
@@ -183,11 +190,37 @@ std::optional<llvm::InlineCost> static getDefaultInlineAdvice(
 
 std::unique_ptr<InlineAdvice>
 DefaultInlineAdvisor::getAdviceImpl(CallBase &CB) {
+  auto *RecordStreamPtr = RecordFile.empty() ? nullptr : &RecordStream;
+  if (hasCallBaseId(CB)) {
+    auto Id = getCallBaseId(CB);
+    auto DecisionIt = FixedDecisions.find(Id);
+    if (DecisionIt != FixedDecisions.end()) {
+      std::optional<InlineCost> ShouldInline;
+      if (DecisionIt->second)
+        ShouldInline = InlineCost::getAlways("Forced");
+
+      return std::make_unique<DefaultInlineAdvice>(
+          this, CB, ShouldInline,
+          FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()), true,
+          RecordStreamPtr);
+    }
+  }
+
   auto OIC = getDefaultInlineAdvice(CB, FAM, Params);
   return std::make_unique<DefaultInlineAdvice>(
       this, CB, OIC,
-      FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
-      RecordFile.empty() ? nullptr : &RecordStream);
+      FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()), true,
+      RecordStreamPtr);
+}
+
+void DefaultInlineAdvisor::loadFixedDecisions(const char *FName) {
+  std::ifstream IStream{FName};
+  for (std::string Line; std::getline(IStream, Line);) {
+    SmallVector<StringRef, 4> LineParts;
+    StringRef{Line}.split(LineParts, ',');
+    assert(LineParts.size() == 4);
+    FixedDecisions[std::stoi(LineParts[2].str())] = LineParts[3] == "inlined";
+  }
 }
 
 InlineAdvice::InlineAdvice(InlineAdvisor *Advisor, CallBase &CB,
