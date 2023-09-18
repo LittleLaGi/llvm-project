@@ -84,6 +84,7 @@ add_llvm_component_library(LLVMAnalysis
   Lint.cpp
   Loads.cpp
   Local.cpp
+  LocalFunctionInfo.cpp
   LoopAccessAnalysis.cpp
   LoopAnalysisManager.cpp
   LoopCacheAnalysis.cpp
