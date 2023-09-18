@@ -1619,6 +1619,11 @@ bool SimplifyCFGOpt::HoistThenElseCodeToIf(BranchInst *BI, bool EqTermsOnly) {
         I1->andIRFlags(I2);
         combineMetadataForCSE(I1, I2, true);
 
+        auto *CBID = I2->getMetadata("callbase.id");
+        if (CBID) {
+          I1->setMetadata("callbase.id", CBID);
+        }
+
         // I1 and I2 are being combined into a single instruction.  Its debug
         // location is the merged locations of the original instructions.
         I1->applyMergedLocation(I1->getDebugLoc(), I2->getDebugLoc());

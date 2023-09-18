@@ -3934,6 +3934,10 @@ bool InstCombinerImpl::transformConstExprCastCall(CallBase &Call) {
 
   // Preserve prof metadata if any.
   NewCall->copyMetadata(*Caller, {LLVMContext::MD_prof});
+  auto *CBID = Caller->getMetadata("callbase.id");
+  if (CBID) {
+    NewCall->setMetadata("callbase.id", CBID);
+  }
 
   // Insert a cast of the return type as necessary.
   Instruction *NC = NewCall;

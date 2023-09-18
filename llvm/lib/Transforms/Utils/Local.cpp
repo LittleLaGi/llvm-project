@@ -2408,6 +2408,10 @@ BasicBlock *llvm::changeToInvokeAndSplitBasicBlock(CallInst *CI,
   II->setCallingConv(CI->getCallingConv());
   II->setAttributes(CI->getAttributes());
   II->setMetadata(LLVMContext::MD_prof, CI->getMetadata(LLVMContext::MD_prof));
+  auto *CBID = CI->getMetadata("callbase.id");
+  if (CBID) {
+    II->setMetadata("callbase.id", CBID);
+  }
 
   if (DTU)
     DTU->applyUpdates({{DominatorTree::Insert, BB, UnwindEdge}});
@@ -2879,11 +2883,14 @@ void llvm::patchReplacementInstruction(Instruction *I, Value *Repl) {
   // guarantees the execution of the other), then we can combine the
   // noalias scopes here and do better than the general conservative
   // answer used in combineMetadata().
+  auto *CBIDRepl = ReplInst->getMetadata("callbase.id");
 
   // In general, GVN unifies expressions over different control-flow
   // regions, and so we need a conservative combination of the noalias
   // scopes.
   combineMetadataForCSE(ReplInst, I, false);
+  if(CBIDRepl)
+    ReplInst->setMetadata("callbase.id", CBIDRepl);
 }
 
 template <typename RootType, typename DominatesFn>

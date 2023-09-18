@@ -1079,6 +1079,7 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpyLoad,
     assert(isa<AllocaInst>(cpyDest) && "Can only increase alloca alignment!");
     cast<AllocaInst>(cpyDest)->setAlignment(srcAlign);
   }
+  auto *CBID = C->getMetadata("callbase.id");
 
   if (SkippedLifetimeStart) {
     SkippedLifetimeStart->moveBefore(C);
@@ -1096,6 +1097,9 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpyLoad,
   combineMetadata(C, cpyLoad, KnownIDs, true);
   if (cpyLoad != cpyStore)
     combineMetadata(C, cpyStore, KnownIDs, true);
+  if(CBID){
+      C->setMetadata("callbase.id", CBID);
+  }
 
   ++NumCallSlot;
   return true;

@@ -973,6 +973,10 @@ static void PropagateOperandBundles(Function::iterator InlinedBB,
     Instruction *NewInst = CallBase::Create(I, OpBundles, I);
     NewInst->takeName(I);
     I->replaceAllUsesWith(NewInst);
+    auto *CBID = I->getMetadata("callbase.id");
+    if (CBID) {
+      NewInst->setMetadata("callbase.id", CBID);
+    }
     I->eraseFromParent();
   }
 }
@@ -2354,6 +2358,11 @@ llvm::InlineResult llvm::InlineFunction(CallBase &CB, InlineFunctionInfo &IFI,
           NewCI->setAttributes(Attrs);
           NewCI->setCallingConv(CI->getCallingConv());
           CI->replaceAllUsesWith(NewCI);
+          auto *CBID = CI->getMetadata("callbase.id");
+          if (CBID) {
+            NewCI->setMetadata("callbase.id", CBID);
+          }
+
           CI->eraseFromParent();
           CI = NewCI;
         }
