@@ -14,7 +14,10 @@
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/Constants.h"
 #include <memory>
+#include <sstream>
+#include <system_error>
 
 namespace llvm {
 class BasicBlock;
@@ -142,13 +145,47 @@ private:
   bool Recorded = false;
 };
 
+namespace {
+__attribute__((noinline)) size_t getCallBaseId(const CallBase &CB) {
+  auto *N = CB.getMetadata("callbase.id");
+  assert(N && "CallBase does not carry metadata.\n");
+  Constant *C = dyn_cast<ConstantAsMetadata>(dyn_cast<MDNode>(N)->getOperand(0))
+                    ->getValue();
+  return cast<ConstantInt>(C)->getZExtValue();
+}
+
+bool hasCallBaseId(const CallBase &CB) {
+  auto *N = CB.getMetadata("callbase.id");
+  if (not N)
+    return false;
+
+  if (not dyn_cast<MDNode>(N))
+    return false;
+
+  if (not dyn_cast<MDNode>(N)->getOperand(0))
+    return false;
+
+  auto *CM = dyn_cast<ConstantAsMetadata>(dyn_cast<MDNode>(N)->getOperand(0));
+  if (not CM)
+    return false;
+  if (not CM->getValue())
+    return false;
+
+  return true;
+}
+}
+
 class DefaultInlineAdvice : public InlineAdvice {
 public:
   DefaultInlineAdvice(InlineAdvisor *Advisor, CallBase &CB,
                       std::optional<InlineCost> OIC,
-                      OptimizationRemarkEmitter &ORE, bool EmitRemarks = true)
+                      OptimizationRemarkEmitter &ORE, bool EmitRemarks = true,
+                      raw_string_ostream *RecordStream = nullptr)
       : InlineAdvice(Advisor, CB, ORE, OIC.has_value()), OriginalCB(&CB),
-        OIC(OIC), EmitRemarks(EmitRemarks) {}
+        OIC(OIC), EmitRemarks(EmitRemarks), ID{(OriginalCB && hasCallBaseId(*OriginalCB))
+                         ? getCallBaseId(*OriginalCB)
+                         : -1},
+        RecordStream{RecordStream} {}
 
 private:
   void recordUnsuccessfulInliningImpl(const InlineResult &Result) override;
@@ -159,6 +196,8 @@ private:
   CallBase *const OriginalCB;
   std::optional<InlineCost> OIC;
   bool EmitRemarks;
+  size_t ID;
+  raw_string_ostream *RecordStream;
 };
 
 /// Interface for deciding whether to inline a call site or not.
@@ -232,12 +271,20 @@ class DefaultInlineAdvisor : public InlineAdvisor {
 public:
   DefaultInlineAdvisor(Module &M, FunctionAnalysisManager &FAM,
                        InlineParams Params, InlineContext IC)
-      : InlineAdvisor(M, FAM, IC), Params(Params) {}
+      : InlineAdvisor(M, FAM, IC), Params(Params), RecordStream{RecordString} {
+    if (const char *RecordFileName = std::getenv("RECORD_INLINE"))
+      RecordFile = RecordFileName;
+  }
+
+  ~DefaultInlineAdvisor() override;
 
 private:
   std::unique_ptr<InlineAdvice> getAdviceImpl(CallBase &CB) override;
 
   InlineParams Params;
+  std::string RecordFile;
+  std::string RecordString;
+  raw_string_ostream RecordStream;
 };
 
 /// Used for dynamically registering InlineAdvisors as plugins

@@ -105,6 +105,9 @@ private:
 
 void DefaultInlineAdvice::recordUnsuccessfulInliningImpl(
     const InlineResult &Result) {
+  if (RecordStream)
+      *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
+                    << ID << ',' << "not_inlined" << '\n';
   using namespace ore;
   llvm::setInlineRemark(*OriginalCB, std::string(Result.getFailureReason()) +
                                          "; " + inlineCostStr(*OIC));
@@ -118,6 +121,9 @@ void DefaultInlineAdvice::recordUnsuccessfulInliningImpl(
 }
 
 void DefaultInlineAdvice::recordInliningWithCalleeDeletedImpl() {
+  if (RecordStream)
+      *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
+                    << ID << ',' << "inlined" << '\n';
   if (EmitRemarks)
     emitInlinedIntoBasedOnCost(ORE, DLoc, Block, *Callee, *Caller, *OIC,
                                /* ForProfileContext= */ false,
@@ -125,10 +131,21 @@ void DefaultInlineAdvice::recordInliningWithCalleeDeletedImpl() {
 }
 
 void DefaultInlineAdvice::recordInliningImpl() {
+  if (RecordStream)
+      *RecordStream << Caller->getName() << ',' << Callee->getName() << ','
+                    << ID << ',' << "inlined" << '\n';
   if (EmitRemarks)
     emitInlinedIntoBasedOnCost(ORE, DLoc, Block, *Callee, *Caller, *OIC,
                                /* ForProfileContext= */ false,
                                Advisor->getAnnotatedInlinePassName());
+}
+
+DefaultInlineAdvisor::~DefaultInlineAdvisor() {
+  if (RecordFile.empty())
+    return;
+  std::error_code EC;
+  raw_fd_ostream FStream{RecordFile, EC};
+  FStream << RecordStream.str();
 }
 
 std::optional<llvm::InlineCost> static getDefaultInlineAdvice(
@@ -169,7 +186,8 @@ DefaultInlineAdvisor::getAdviceImpl(CallBase &CB) {
   auto OIC = getDefaultInlineAdvice(CB, FAM, Params);
   return std::make_unique<DefaultInlineAdvice>(
       this, CB, OIC,
-      FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()));
+      FAM.getResult<OptimizationRemarkEmitterAnalysis>(*CB.getCaller()),
+      RecordFile.empty() ? nullptr : &RecordStream);
 }
 
 InlineAdvice::InlineAdvice(InlineAdvisor *Advisor, CallBase &CB,
